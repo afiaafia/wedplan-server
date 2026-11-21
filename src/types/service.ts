@@ -7,6 +7,7 @@ export const SERVICE_CATEGORIES = [
   "Makeup & Beauty",
   "Music & Entertainment",
   "Wedding Planning",
+  "Wedding Fashion",
   "Other",
 ] as const;
 
@@ -34,6 +35,7 @@ export interface ServiceDocument {
 
   approvalStatus: ServiceApprovalStatus;
   isActive: boolean;
+  rejectionReason?: string;
 
   createdAt: Date;
   updatedAt: Date;
@@ -50,9 +52,26 @@ export interface PublicService {
   createdAt: string;
 }
 
+export interface BrowseService extends PublicService {
+  vendor: ServiceDetailVendor | null;
+}
+
+export interface ServiceDetailVendor {
+  id: string;
+  name?: string;
+  profileImage?: string;
+  businessName?: string;
+}
+
+export interface ServiceDetail extends PublicService {
+  vendor: ServiceDetailVendor | null;
+}
+
 export interface VendorService extends PublicService {
   approvalStatus: ServiceApprovalStatus;
   isActive: boolean;
+  rejectionReason?: string;
+  vendorName?: string;
   updatedAt: string;
 }
 
@@ -68,7 +87,11 @@ export interface VendorServiceInput {
 
 export type VendorServiceUpdate = Partial<Omit<VendorServiceInput, "isActive">>;
 
-export type PublicServiceSort = "newest" | "price_asc" | "price_desc";
+export type PublicServiceSort =
+  | "recommended"
+  | "newest"
+  | "price_asc"
+  | "price_desc";
 
 export interface FeaturedVendor {
   id: string;

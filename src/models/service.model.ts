@@ -10,18 +10,31 @@ import {
 import { COLLECTIONS } from "../config/collections.js";
 import { getDatabase } from "../config/database.js";
 import type {
+  BrowseService,
   FeaturedService,
   FeaturedServicesData,
   FeaturedVendor,
   PublicService,
   PublicServiceSort,
+  ServiceDetail,
+  ServiceApprovalStatus,
   ServiceCategory,
   ServiceDocument,
+  ServiceDetailVendor,
   VendorService,
   VendorServiceInput,
   VendorServiceUpdate,
 } from "../types/service.js";
-import type { PublicServicesQuery } from "../validators/service.validator.js";
+import type { BookableServiceRecord } from "../types/booking.js";
+import type {
+  PublicServicesQuery,
+  VendorServicesQuery,
+} from "../validators/service.validator.js";
+import type { AdminServicesQuery } from "../validators/dashboard.validator.js";
+import {
+  buildPaginationMeta,
+  type PaginationMeta,
+} from "../types/dashboard.js";
 
 const PUBLIC_SERVICE_PROJECTION = {
   _id: 1,
@@ -32,9 +45,11 @@ const PUBLIC_SERVICE_PROJECTION = {
   price: 1,
   images: 1,
   createdAt: 1,
+  vendorId: 1,
 } as const;
 
 const PUBLIC_SERVICE_SORTS: Record<PublicServiceSort, Sort> = {
+  recommended: { createdAt: -1, _id: -1 },
   newest: { createdAt: -1, _id: -1 },
   price_asc: { price: 1, _id: 1 },
   price_desc: { price: -1, _id: -1 },
@@ -56,6 +71,17 @@ const FEATURED_VENDOR_PROJECTION = {
   name: 1,
   image: 1,
   businessName: 1,
+} as const;
+
+const SERVICE_DETAIL_PROJECTION = {
+  ...PUBLIC_SERVICE_PROJECTION,
+  vendorId: 1,
+} as const;
+
+const BOOKABLE_SERVICE_PROJECTION = {
+  _id: 1,
+  title: 1,
+  vendorId: 1,
 } as const;
 
 interface FeaturedVendorDocument {
@@ -104,18 +130,57 @@ function toPublicService(document: WithId<ServiceDocument>): PublicService {
     category: document.category,
     description: document.description,
     location: document.location,
-    price: document.price,
+    price: Number.isFinite(document.price) ? document.price : 0,
     images: Array.isArray(document.images) ? document.images : [],
     createdAt: document.createdAt.toISOString(),
   };
 }
 
+async function findVendorDocuments(
+  documents: readonly WithId<ServiceDocument>[],
+  db: Db
+): Promise<WithId<FeaturedVendorDocument>[]> {
+  const vendorObjectIds = Array.from(
+    new Set(
+      documents
+        .map((document) => document.vendorId)
+        .filter(
+          (vendorId): vendorId is string =>
+            typeof vendorId === "string" && ObjectId.isValid(vendorId)
+        )
+    )
+  ).map((vendorId) => new ObjectId(vendorId));
+
+  if (!vendorObjectIds.length) {
+    return [];
+  }
+
+  return db
+    .collection<FeaturedVendorDocument>(USER_COLLECTION)
+    .find(
+      { _id: { $in: vendorObjectIds } },
+      { projection: FEATURED_VENDOR_PROJECTION }
+    )
+    .toArray();
+}
+
+function vendorForService(
+  vendorId: unknown,
+  vendorsById: Map<string, WithId<FeaturedVendorDocument>>
+): ServiceDetailVendor | null {
+  if (typeof vendorId !== "string") {
+    return null;
+  }
+
+  const vendor = vendorsById.get(vendorId);
+  return vendor ? toFeaturedVendor(vendor) : null;
+}
+
 export async function findPublicServices(
-  query: PublicServicesQuery
-): Promise<{ services: PublicService[]; total: number }> {
-  const collection = getDatabase().collection<ServiceDocument>(
-    COLLECTIONS.services
-  );
+  query: PublicServicesQuery,
+  db: Db = getDatabase()
+): Promise<{ services: BrowseService[]; total: number }> {
+  const collection = db.collection<ServiceDocument>(COLLECTIONS.services);
   const filter = buildPublicFilter(query);
 
   const [documents, total] = await Promise.all([
@@ -128,7 +193,18 @@ export async function findPublicServices(
     collection.countDocuments(filter),
   ]);
 
-  return { services: documents.map(toPublicService), total };
+  const vendorDocuments = await findVendorDocuments(documents, db);
+  const vendorsById = new Map(
+    vendorDocuments.map((vendor) => [vendor._id.toString(), vendor])
+  );
+
+  return {
+    services: documents.map((document) => ({
+      ...toPublicService(document),
+      vendor: vendorForService(document.vendorId, vendorsById),
+    })),
+    total,
+  };
 }
 
 export async function findPublicServiceById(
@@ -183,6 +259,79 @@ function toFeaturedVendor(
   };
 }
 
+export async function findServiceDetailById(
+  id: string,
+  db: Db = getDatabase()
+): Promise<ServiceDetail | null> {
+  if (!ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const document = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .findOne(
+      {
+        _id: new ObjectId(id),
+        approvalStatus: "approved",
+        isActive: true,
+      },
+      { projection: SERVICE_DETAIL_PROJECTION }
+    );
+
+  if (!document) {
+    return null;
+  }
+
+  const vendorObjectId =
+    typeof document.vendorId === "string" && ObjectId.isValid(document.vendorId)
+      ? new ObjectId(document.vendorId)
+      : null;
+
+  const vendorDocument = vendorObjectId
+    ? await db
+        .collection<FeaturedVendorDocument>(USER_COLLECTION)
+        .findOne(
+          { _id: vendorObjectId },
+          { projection: FEATURED_VENDOR_PROJECTION }
+        )
+    : null;
+
+  return {
+    ...toPublicService(document),
+    vendor: vendorDocument ? toFeaturedVendor(vendorDocument) : null,
+  };
+}
+
+export async function findBookableServiceById(
+  id: string,
+  db: Db = getDatabase()
+): Promise<BookableServiceRecord | null> {
+  if (!ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const document = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .findOne(
+      {
+        _id: new ObjectId(id),
+        approvalStatus: "approved",
+        isActive: true,
+      },
+      { projection: BOOKABLE_SERVICE_PROJECTION }
+    );
+
+  if (!document) {
+    return null;
+  }
+
+  return {
+    id: document._id.toString(),
+    title: document.title,
+    vendorId: document.vendorId,
+  };
+}
+
 export function mapFeaturedServices(
   documents: WithId<ServiceDocument>[],
   vendorDocuments: WithId<FeaturedVendorDocument>[]
@@ -219,26 +368,7 @@ export async function findFeaturedServices(
     servicesCollection.countDocuments(filter),
   ]);
 
-  const vendorObjectIds = Array.from(
-    new Set(
-      documents
-        .map((document) => document.vendorId)
-        .filter(
-          (vendorId): vendorId is string =>
-            typeof vendorId === "string" && ObjectId.isValid(vendorId)
-        )
-    )
-  ).map((vendorId) => new ObjectId(vendorId));
-
-  const vendorDocuments = vendorObjectIds.length
-    ? await db
-        .collection<FeaturedVendorDocument>(USER_COLLECTION)
-        .find(
-          { _id: { $in: vendorObjectIds } },
-          { projection: FEATURED_VENDOR_PROJECTION }
-        )
-        .toArray()
-    : [];
+  const vendorDocuments = await findVendorDocuments(documents, db);
 
   return {
     services: mapFeaturedServices(documents, vendorDocuments),
@@ -247,12 +377,18 @@ export async function findFeaturedServices(
 }
 
 function toVendorService(document: WithId<ServiceDocument>): VendorService {
-  return {
+  const service: VendorService = {
     ...toPublicService(document),
     approvalStatus: document.approvalStatus,
     isActive: document.isActive,
     updatedAt: document.updatedAt.toISOString(),
   };
+
+  if (typeof document.rejectionReason === "string" && document.rejectionReason) {
+    service.rejectionReason = document.rejectionReason;
+  }
+
+  return service;
 }
 
 export function buildVendorServiceFilter(
@@ -271,9 +407,10 @@ export function buildVendorServiceFilter(
 
 export async function countActiveVendorServices(
   vendorId: string,
-  session?: ClientSession
+  session?: ClientSession,
+  db: Db = getDatabase()
 ): Promise<number> {
-  return getDatabase()
+  return db
     .collection<ServiceDocument>(COLLECTIONS.services)
     .countDocuments({ vendorId, isActive: true }, { session });
 }
@@ -349,6 +486,19 @@ export async function findVendorServiceById(
   return document ? toVendorService(document) : null;
 }
 
+export async function findServiceVendorId(
+  id: string,
+  db: Db = getDatabase()
+): Promise<string | null> {
+  if (!ObjectId.isValid(id)) return null;
+
+  const document = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .findOne({ _id: new ObjectId(id) }, { projection: { vendorId: 1 } });
+
+  return typeof document?.vendorId === "string" ? document.vendorId : null;
+}
+
 export async function updateVendorService(
   vendorId: string,
   id: string,
@@ -396,6 +546,260 @@ export async function setVendorServiceActive(
       filter,
       { $set: { isActive, updatedAt: new Date() } },
       { session, returnDocument: "after" }
+    );
+
+  return document ? toVendorService(document) : null;
+}
+
+export async function findServicesForReview(
+  db: Db = getDatabase()
+): Promise<VendorService[]> {
+  const documents = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .find({})
+    .sort({ createdAt: -1, _id: -1 })
+    .toArray();
+
+  return documents.map(toVendorService);
+}
+
+export async function setServiceApprovalStatus(
+  id: string,
+  approvalStatus: ServiceApprovalStatus,
+  db: Db = getDatabase(),
+  rejectionReason?: string,
+  expectedStatus?: ServiceApprovalStatus
+): Promise<VendorService | null> {
+  if (!ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const filter: Filter<ServiceDocument> = { _id: new ObjectId(id) };
+  if (expectedStatus) {
+    filter.approvalStatus = expectedStatus;
+  }
+
+  const set: Record<string, unknown> = {
+    approvalStatus,
+    updatedAt: new Date(),
+  };
+  const update: UpdateFilter<ServiceDocument> = {
+    $set: set as UpdateFilter<ServiceDocument>["$set"],
+  };
+
+  if (approvalStatus === "rejected" && rejectionReason) {
+    set.rejectionReason = rejectionReason;
+  } else {
+    (update as { $unset?: Record<string, string> }).$unset = {
+      rejectionReason: "",
+    };
+  }
+
+  const document = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .findOneAndUpdate(filter, update, { returnDocument: "after" });
+
+  return document ? toVendorService(document) : null;
+}
+
+function buildManagedServiceFilter(
+  query: VendorServicesQuery | AdminServicesQuery,
+  vendorId?: string
+): Filter<ServiceDocument> {
+  const filter: Filter<ServiceDocument> = {};
+
+  if (vendorId) {
+    filter.vendorId = vendorId;
+  }
+
+  const keyword = query.q?.trim();
+  if (keyword) {
+    const pattern = escapeRegex(keyword);
+    filter.$or = [
+      { title: { $regex: pattern, $options: "i" } },
+      { description: { $regex: pattern, $options: "i" } },
+      { location: { $regex: pattern, $options: "i" } },
+    ];
+  }
+
+  if (query.category) {
+    filter.category = query.category;
+  }
+
+  if (query.approvalStatus) {
+    filter.approvalStatus = query.approvalStatus;
+  }
+
+  if (query.isActive !== "all") {
+    filter.isActive = query.isActive === "true";
+  }
+
+  return filter;
+}
+
+export async function findVendorServicesPage(
+  vendorId: string,
+  query: VendorServicesQuery,
+  db: Db = getDatabase()
+): Promise<{ services: VendorService[]; meta: PaginationMeta }> {
+  const collection = db.collection<ServiceDocument>(COLLECTIONS.services);
+  const filter = buildManagedServiceFilter(query, vendorId);
+  const [documents, total] = await Promise.all([
+    collection
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((query.page - 1) * query.limit)
+      .limit(query.limit)
+      .toArray(),
+    collection.countDocuments(filter),
+  ]);
+
+  return {
+    services: documents.map(toVendorService),
+    meta: buildPaginationMeta(query.page, query.limit, total),
+  };
+}
+
+export async function findServicesForReviewPage(
+  query: AdminServicesQuery,
+  db: Db = getDatabase()
+): Promise<{ services: VendorService[]; meta: PaginationMeta }> {
+  const collection = db.collection<ServiceDocument>(COLLECTIONS.services);
+  const filter = buildManagedServiceFilter(query);
+  const [documents, total] = await Promise.all([
+    collection
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((query.page - 1) * query.limit)
+      .limit(query.limit)
+      .toArray(),
+    collection.countDocuments(filter),
+  ]);
+
+  const vendorDocuments = await findVendorDocuments(documents, db);
+  const vendorsById = new Map(
+    vendorDocuments.map((vendor) => [vendor._id.toString(), vendor])
+  );
+
+  return {
+    services: documents.map((document) => {
+      const service = toVendorService(document);
+      const vendor = vendorsById.get(document.vendorId);
+      if (typeof vendor?.name === "string" && vendor.name.trim()) {
+        service.vendorName = vendor.name;
+      }
+      return service;
+    }),
+    meta: buildPaginationMeta(query.page, query.limit, total),
+  };
+}
+
+const IMPORTANT_SERVICE_KEYS = [
+  "title",
+  "category",
+  "description",
+  "location",
+  "price",
+  "images",
+] as const;
+
+function hasImportantServiceChange(
+  current: ServiceDocument,
+  patch: VendorServiceUpdate
+): boolean {
+  return IMPORTANT_SERVICE_KEYS.some((key) => {
+    const nextValue = patch[key];
+    if (nextValue === undefined) return false;
+
+    if (key === "images" || key === "category") {
+      return JSON.stringify(current[key]) !== JSON.stringify(nextValue);
+    }
+
+    return current[key] !== nextValue;
+  });
+}
+
+export async function updateVendorServiceWithApproval(
+  vendorId: string,
+  id: string,
+  patch: VendorServiceUpdate,
+  db: Db = getDatabase()
+): Promise<VendorService | null> {
+  if (!ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const collection = db.collection<ServiceDocument>(COLLECTIONS.services);
+  const current = await collection.findOne(buildVendorServiceFilter(vendorId, id));
+  if (!current) return null;
+
+  const requiresReview =
+    current.approvalStatus !== "pending" && hasImportantServiceChange(current, patch);
+  const set: Record<string, unknown> = {
+    ...patch,
+    updatedAt: new Date(),
+  };
+  const update: UpdateFilter<ServiceDocument> = {
+    $set: set as UpdateFilter<ServiceDocument>["$set"],
+  };
+
+  if (requiresReview) {
+    set.approvalStatus = "pending";
+    (update as { $unset?: Record<string, string> }).$unset = {
+      rejectionReason: "",
+    };
+  }
+
+  const filter = buildVendorServiceFilter(vendorId, id);
+  filter.approvalStatus = current.approvalStatus;
+
+  const document = await collection.findOneAndUpdate(filter, update, {
+    returnDocument: "after",
+  });
+
+  return document ? toVendorService(document) : null;
+}
+
+export async function deleteVendorService(
+  vendorId: string,
+  id: string,
+  db: Db = getDatabase()
+): Promise<boolean> {
+  if (!ObjectId.isValid(id)) return false;
+
+  const result = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .deleteOne(buildVendorServiceFilter(vendorId, id));
+
+  return result.deletedCount === 1;
+}
+
+export async function deleteServiceById(
+  id: string,
+  db: Db = getDatabase()
+): Promise<boolean> {
+  if (!ObjectId.isValid(id)) return false;
+
+  const result = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .deleteOne({ _id: new ObjectId(id) });
+
+  return result.deletedCount === 1;
+}
+
+export async function setServiceActiveById(
+  id: string,
+  isActive: boolean,
+  db: Db = getDatabase()
+): Promise<VendorService | null> {
+  if (!ObjectId.isValid(id)) return null;
+
+  const document = await db
+    .collection<ServiceDocument>(COLLECTIONS.services)
+    .findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { isActive, updatedAt: new Date() } },
+      { returnDocument: "after" }
     );
 
   return document ? toVendorService(document) : null;

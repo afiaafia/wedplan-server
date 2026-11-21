@@ -1,6 +1,7 @@
 import {
   ObjectId,
   type ClientSession,
+  type Db,
   type Filter,
   type UpdateFilter,
 } from "mongodb";
@@ -123,6 +124,24 @@ export async function ensureServiceCounter(
 
   await store.upsertCounter(document);
   return (await store.findOne({ _id: objectId })) ?? document;
+}
+
+export async function reconcileServiceCounter(
+  vendorId: string,
+  db: Db = getDatabase()
+): Promise<void> {
+  if (!ObjectId.isValid(vendorId)) return;
+
+  const objectId = new ObjectId(vendorId);
+  const activeCount = await db
+    .collection(COLLECTIONS.services)
+    .countDocuments({ vendorId, isActive: true });
+
+  await db.collection(COLLECTIONS.serviceLimitCounters).updateOne(
+    { _id: objectId },
+    { $set: { activeCount, updatedAt: new Date() } },
+    { upsert: true }
+  );
 }
 
 export async function reserveServiceSlot(

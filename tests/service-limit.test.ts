@@ -9,6 +9,7 @@ import {
 } from "../src/services/service-limits.service.js";
 import {
   ensureServiceCounter,
+  reconcileServiceCounter,
   reserveServiceSlot,
   type ServiceCounterDocument,
   type ServiceCounterStore,
@@ -183,6 +184,34 @@ test("counter seeding is idempotent and does not rely on duplicate-key recovery"
   assert.equal(upserts, 1);
   assert.equal(first.activeCount, 2);
   assert.equal(second.activeCount, 2);
+});
+
+test("counter reconciliation repairs stale counters after moderation changes", async () => {
+  let stored: { activeCount: number } | null = { activeCount: 9 };
+  let upserted = false;
+
+  const db = {
+    collection(name: string) {
+      if (name === "services") {
+        return { countDocuments: async () => 2 };
+      }
+      return {
+        updateOne: async (
+          _filter: unknown,
+          update: { $set: { activeCount: number } },
+          options: { upsert: boolean }
+        ) => {
+          stored = { activeCount: update.$set.activeCount };
+          upserted = options.upsert;
+        },
+      };
+    },
+  };
+
+  await reconcileServiceCounter(vendorId, db as never);
+
+  assert.deepEqual(stored, { activeCount: 2 });
+  assert.equal(upserted, true);
 });
 
 test("concurrent free activations cannot exceed three active services", async () => {
