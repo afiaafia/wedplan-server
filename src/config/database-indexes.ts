@@ -30,6 +30,10 @@ export async function createDatabaseIndexes(): Promise<void> {
       key: { title: "text" },
       name: "service_title_text",
     },
+    {
+      key: { approvalStatus: 1, createdAt: -1 },
+      name: "service_moderation_queue",
+    },
   ]);
 
   // Booking indexes
@@ -45,6 +49,20 @@ export async function createDatabaseIndexes(): Promise<void> {
     {
       key: { serviceId: 1, eventDate: 1, status: 1 },
       name: "booking_service_event_date",
+    },
+    {
+      key: { activeRequestKey: 1 },
+      name: "booking_active_request_key_unique",
+      unique: true,
+      partialFilterExpression: { activeRequestKey: { $exists: true } },
+    },
+    {
+      key: { vendorId: 1, createdAt: -1 },
+      name: "booking_vendor_created",
+    },
+    {
+      key: { status: 1, createdAt: -1 },
+      name: "booking_status_created",
     },
   ]);
 
@@ -64,6 +82,30 @@ export async function createDatabaseIndexes(): Promise<void> {
       name: "transaction_stripe_subscription",
       unique: true,
       sparse: true,
+    },
+    {
+      key: { status: 1, createdAt: -1 },
+      name: "transaction_status_created",
+    },
+    {
+      key: { stripeEventId: 1 },
+      name: "transaction_stripe_event",
+      sparse: true,
+    },
+  ]);
+
+  await db.collection("user").createIndexes([
+    {
+      key: { role: 1, createdAt: -1 },
+      name: "user_role_created",
+    },
+    {
+      key: { role: 1, subscriptionPlan: 1, subscriptionExpiresAt: 1 },
+      name: "user_role_subscription",
+    },
+    {
+      key: { isBlocked: 1, role: 1 },
+      name: "user_blocked_role",
     },
   ]);
 
