@@ -1,7 +1,11 @@
 import type { RequestHandler } from "express";
 import type { Auth } from "../lib/auth.js";
-import { hasValidSessionExpiry } from "../lib/session-expiry.js";
 import { AppError } from "../errors/app-error.js";
+import {
+  authorizeSession,
+  getSessionHeaders,
+  type SessionSnapshot,
+} from "./require-auth.js";
 
 export interface AuthenticatedVendor {
   id: string;
@@ -9,18 +13,7 @@ export interface AuthenticatedVendor {
   name: string;
 }
 
-interface SessionUserForVendorAuth {
-  id?: unknown;
-  email?: unknown;
-  name?: unknown;
-  role?: unknown;
-  isBlocked?: unknown;
-}
-
-interface SessionForVendorAuth {
-  session?: { expiresAt?: unknown };
-  user?: SessionUserForVendorAuth;
-}
+type SessionForVendorAuth = SessionSnapshot;
 
 declare global {
   namespace Express {
@@ -33,15 +26,14 @@ declare global {
 export function authorizeVendorSession(
   session: SessionForVendorAuth | null | undefined
 ): AuthenticatedVendor {
-  if (!session?.user) {
-    throw new AppError(401, "UNAUTHORIZED", "Please sign in to continue");
-  }
+  const user = authorizeSession(session, {
+    allowedRoles: ["vendor"],
+    roleErrorCode: "VENDOR_ACCESS_REQUIRED",
+    roleErrorMessage: "Only vendors can access this resource",
+    invalidSessionMessage: "Invalid vendor session",
+  });
 
-  if (!hasValidSessionExpiry(session.session?.expiresAt)) {
-    throw new AppError(401, "UNAUTHORIZED", "Your session has expired");
-  }
-
-  if (session.user.role !== "vendor") {
+  if (user.role !== "vendor") {
     throw new AppError(
       403,
       "VENDOR_ACCESS_REQUIRED",
@@ -49,44 +41,17 @@ export function authorizeVendorSession(
     );
   }
 
-  if (session.user.isBlocked) {
-    throw new AppError(
-      403,
-      "ACCOUNT_BLOCKED",
-      "Your account has been blocked"
-    );
-  }
-
-  const { id, email, name } = session.user;
-  if (
-    typeof id !== "string" ||
-    !id ||
-    typeof email !== "string" ||
-    typeof name !== "string"
-  ) {
-    throw new AppError(401, "UNAUTHORIZED", "Invalid vendor session");
-  }
-
-  return { id, email, name };
+  return { id: user.id, email: user.email, name: user.name };
 }
 
 export function requireVendor(auth: Auth): RequestHandler {
   return (req, res, next) => {
-    const headers = new Headers();
-
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value !== undefined) {
-        headers.set(
-          key,
-          Array.isArray(value) ? value.join(", ") : value
-        );
-      }
-    }
-
     void auth.api
-      .getSession({ headers })
+      .getSession({ headers: getSessionHeaders(req) })
       .then((session) => {
-        res.locals.vendor = authorizeVendorSession(session);
+        res.locals.vendor = authorizeVendorSession(
+          session as SessionSnapshot | null
+        );
         next();
       })
       .catch(next);
