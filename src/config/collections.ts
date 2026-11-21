@@ -5,6 +5,7 @@ export const COLLECTIONS = {
   bookings: "bookings",
   transactions: "transactions",
   webhookEvents: "webhookEvents",
+  serviceLimitCounters: "serviceLimitCounters",
 } as const;
 
 export async function createCollections(): Promise<void> {

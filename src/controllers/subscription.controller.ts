@@ -3,6 +3,7 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { getDatabase } from "../config/database.js";
 import { COLLECTIONS } from "../config/collections.js";
 import { getStripe } from "../config/stripe.js";
+import { getPrimaryClientOrigin } from "../config/client-origins.js";
 import type { TransactionDocument } from "../types/transaction.js";
 
 export const createCheckoutSession = asyncHandler(async (_req, res) => {
@@ -10,21 +11,13 @@ export const createCheckoutSession = asyncHandler(async (_req, res) => {
   const stripe = getStripe();
 
   const priceId = process.env.STRIPE_PRICE_ID;
-  const clientUrl = process.env.CLIENT_URL?.replace(/\/+$/, "");
+  const clientUrl = getPrimaryClientOrigin();
 
   if (!priceId) {
     throw new AppError(
       500,
       "STRIPE_PRICE_NOT_CONFIGURED",
       "Subscription price is not configured"
-    );
-  }
-
-  if (!clientUrl) {
-    throw new AppError(
-      500,
-      "CLIENT_URL_NOT_CONFIGURED",
-      "Frontend URL is not configured"
     );
   }
 

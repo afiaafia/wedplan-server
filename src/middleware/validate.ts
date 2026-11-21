@@ -4,10 +4,12 @@ import { AppError } from "../errors/app-error.js";
 
 export function validate(
   schema: ZodType,
-  source: "query" | "params" = "query"
+  source: "query" | "params" | "body" = "query"
 ): RequestHandler {
   return (req, res, next) => {
-    const result = schema.safeParse(source === "query" ? req.query : req.params);
+    const input =
+      source === "query" ? req.query : source === "params" ? req.params : req.body;
+    const result = schema.safeParse(input);
 
     if (!result.success) {
       const details = result.error.issues.map((issue) => ({
@@ -26,7 +28,11 @@ export function validate(
       return;
     }
 
-    res.locals.validated = result.data;
+    const previous = (res.locals.validated ?? {}) as Record<string, unknown>;
+    res.locals.validated = {
+      ...previous,
+      ...(result.data as Record<string, unknown>),
+    };
     next();
   };
 }

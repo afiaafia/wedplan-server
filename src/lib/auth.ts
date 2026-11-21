@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "@better-auth/mongo-adapter";
 import { getDatabase, getMongoClient } from "../config/database.js";
+import { getAllowedClientOrigins } from "../config/client-origins.js";
 import { resolveRegistrationRole } from "../validators/user.validator.js";
 
 function getValidatedAuthEnv() {
@@ -23,21 +24,18 @@ function getValidatedAuthEnv() {
     throw new Error("BETTER_AUTH_URL must be a valid HTTP or HTTPS URL");
   }
 
-  const clientUrl = (process.env.CLIENT_URL || "http://localhost:3000").replace(
-    /\/+$/,
-    ""
-  );
+  const allowedOrigins = getAllowedClientOrigins();
 
-  return { secret, baseURL, clientUrl };
+  return { secret, baseURL, allowedOrigins };
 }
 
 export function createAuth() {
-  const { secret, baseURL, clientUrl } = getValidatedAuthEnv();
+  const { secret, baseURL, allowedOrigins } = getValidatedAuthEnv();
 
   return betterAuth({
     baseURL,
     secret,
-    trustedOrigins: [clientUrl],
+    trustedOrigins: allowedOrigins,
     database: mongodbAdapter(getDatabase(), {
       client: getMongoClient(),
     }),

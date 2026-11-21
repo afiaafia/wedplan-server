@@ -3,19 +3,45 @@ import cors from "cors";
 import helmet from "helmet";
 import { toNodeHandler } from "better-auth/node";
 import type { Auth } from "./lib/auth.js";
+import {
+  getAllowedClientOrigins,
+  getPrimaryClientOrigin,
+  isAllowedClientOrigin,
+} from "./config/client-origins.js";
 import { servicesRouter } from "./routes/services.routes.js";
 import { createSubscriptionRouter } from "./routes/subscription.routes.js";
+import { createVendorDashboardRouter } from "./routes/vendor-dashboard.routes.js";
+import { createVendorServicesRouter } from "./routes/vendor-services.routes.js";
 import { stripeWebhookHandler } from "./controllers/stripe-webhook.controller.js";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
 
 export function createApp(auth: Auth) {
   const app = express();
+  const allowedOrigins = getAllowedClientOrigins();
 
+  app.set("trust proxy", 1);
   app.use(helmet());
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+
+    if (origin && !isAllowedClientOrigin(origin, allowedOrigins)) {
+      res.status(403).json({
+        success: false,
+        error: {
+          message: "Origin not allowed by CORS",
+          code: "ORIGIN_NOT_ALLOWED",
+        },
+      });
+      return;
+    }
+
+    next();
+  });
 
   app.use(
     cors({
-      origin: process.env.CLIENT_URL || "http://localhost:3000",
+      origin: allowedOrigins,
       credentials: true,
     })
   );
@@ -33,7 +59,7 @@ export function createApp(auth: Auth) {
 
   // Redirect root requests to the frontend client
   app.get("/", (_req, res) => {
-    res.redirect(process.env.CLIENT_URL || "http://localhost:3000");
+    res.redirect(getPrimaryClientOrigin());
   });
 
   app.get("/api/health", (_req, res) => {
@@ -45,6 +71,8 @@ export function createApp(auth: Auth) {
 
   app.use("/api/services", servicesRouter);
   app.use("/api/subscriptions", createSubscriptionRouter(auth));
+  app.use("/api/vendor/services", createVendorServicesRouter(auth));
+  app.use("/api/vendor/dashboard", createVendorDashboardRouter(auth));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

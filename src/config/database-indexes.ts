@@ -23,6 +23,10 @@ export async function createDatabaseIndexes(): Promise<void> {
       name: "service_vendor_created",
     },
     {
+      key: { vendorId: 1, isActive: 1 },
+      name: "service_vendor_active",
+    },
+    {
       key: { title: "text" },
       name: "service_title_text",
     },
