@@ -1,106 +1,142 @@
+import { ObjectId } from "mongodb";
 import { AppError } from "../errors/app-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
-import { getDatabase } from "../config/database.js";
 import { COLLECTIONS } from "../config/collections.js";
-import { getStripe } from "../config/stripe.js";
+import {
+  defaultPaymentDependencies,
+  type PaymentDependencies,
+} from "../config/payments.js";
 import { getPrimaryClientOrigin } from "../config/client-origins.js";
+import { resolveEffectivePlan } from "../services/subscription-plan.service.js";
+import {
+  PREMIUM_PLAN,
+  resolvePremiumPlan,
+} from "../services/premium-plan.service.js";
 import type { TransactionDocument } from "../types/transaction.js";
 
-export const createCheckoutSession = asyncHandler(async (_req, res) => {
-  const vendor = res.locals.vendor;
-  const stripe = getStripe();
+interface VendorSubscriptionRecord {
+  subscriptionPlan?: unknown;
+  subscriptionExpiresAt?: unknown;
+}
 
-  const priceId = process.env.STRIPE_PRICE_ID;
-  const clientUrl = getPrimaryClientOrigin();
+interface PendingTransactionRecord {
+  _id: ObjectId;
+  stripeSessionId: string;
+}
 
-  if (!priceId) {
-    throw new AppError(
-      500,
-      "STRIPE_PRICE_NOT_CONFIGURED",
-      "Subscription price is not configured"
-    );
+function assertActiveVendor(record: VendorSubscriptionRecord | null): void {
+  if (!record) {
+    throw new AppError(401, "UNAUTHORIZED", "Vendor account no longer exists");
   }
 
-  const price = await stripe.prices.retrieve(priceId);
-
-  if (!price.active) {
+  if (resolveEffectivePlan(record) === "premium") {
     throw new AppError(
-      400,
-      "SUBSCRIPTION_PRICE_INACTIVE",
-      "The Premium subscription price is currently unavailable"
+      409,
+      "PREMIUM_ALREADY_ACTIVE",
+      "You already have an active Premium subscription"
     );
   }
+}
 
-  if (
-    price.type !== "recurring" ||
-    price.recurring?.interval !== "month"
-  ) {
-    throw new AppError(
-      400,
-      "INVALID_SUBSCRIPTION_PRICE",
-      "The configured Premium price must be a recurring monthly price"
-    );
-  }
+export function createCheckoutSessionController(
+  deps: PaymentDependencies = defaultPaymentDependencies
+) {
+  return asyncHandler(async (_req, res) => {
+    const vendor = res.locals.vendor;
+    const stripe = deps.getStripeClient();
+    const db = deps.getDb();
+    const clientUrl = getPrimaryClientOrigin();
+    const users = db.collection<VendorSubscriptionRecord>("user");
+    const transactions = db.collection(COLLECTIONS.transactions);
 
-  if (!price.unit_amount || price.unit_amount <= 0) {
-    throw new AppError(
-      400,
-      "INVALID_SUBSCRIPTION_AMOUNT",
-      "The configured subscription price has an invalid amount"
-    );
-  }
-
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    line_items: [
+    const vendorRecord = await users.findOne(
       {
-        price: priceId,
-        quantity: 1,
+        _id: new ObjectId(vendor.id),
+        role: "vendor",
+        isBlocked: { $ne: true },
       },
-    ],
-    customer_email: vendor.email,
-    client_reference_id: vendor.id,
-    metadata: {
-      vendorId: vendor.id,
-      plan: "premium",
-    },
-    subscription_data: {
-      metadata: {
-        vendorId: vendor.id,
-        plan: "premium",
-      },
-    },
-    success_url: `${clientUrl}/dashboard/vendor?subscription=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${clientUrl}/dashboard/vendor?subscription=cancelled`,
-  });
-
-  if (!session.url) {
-    throw new AppError(
-      500,
-      "CHECKOUT_URL_MISSING",
-      "Stripe did not return a Checkout URL"
+      { projection: { subscriptionPlan: 1, subscriptionExpiresAt: 1 } }
     );
-  }
 
-  const transaction: TransactionDocument = {
-    vendorId: vendor.id,
-    plan: "premium",
-    amount: price.unit_amount / 100,
-    currency: price.currency,
-    stripeSessionId: session.id,
-    status: "pending",
-    createdAt: new Date(),
-  };
+    assertActiveVendor(vendorRecord);
 
-  await getDatabase()
-    .collection(COLLECTIONS.transactions)
-    .insertOne(transaction);
+    const plan = await resolvePremiumPlan(stripe, deps.getPriceId());
 
-  res.status(201).json({
-    success: true,
-    message: "Checkout session created successfully",
-    data: {
-      checkoutUrl: session.url,
-    },
+    const pending = (await transactions
+      .find({ vendorId: vendor.id, status: "pending" })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(1)
+      .toArray()) as PendingTransactionRecord[];
+
+    const latestPending = pending[0];
+
+    if (latestPending?.stripeSessionId) {
+      try {
+        const existing = await stripe.checkout.sessions.retrieve(
+          latestPending.stripeSessionId
+        );
+
+        if (existing.status === "open" && existing.url) {
+          res.status(200).json({
+            success: true,
+            message: "Existing checkout session is still available",
+            data: { checkoutUrl: existing.url },
+          });
+          return;
+        }
+
+        await transactions.updateOne(
+          { _id: latestPending._id },
+          { $set: { status: "cancelled", updatedAt: new Date() } }
+        );
+      } catch {
+        // A missing/inaccessible session is not a reason to block a new checkout.
+      }
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: plan.priceId, quantity: 1 }],
+      customer_email: vendor.email,
+      client_reference_id: vendor.id,
+      metadata: { vendorId: vendor.id, plan: PREMIUM_PLAN },
+      subscription_data: {
+        metadata: { vendorId: vendor.id, plan: PREMIUM_PLAN },
+      },
+      success_url: `${clientUrl}/dashboard/vendor/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${clientUrl}/dashboard/vendor/payment/cancel`,
+    });
+
+    if (!session.url) {
+      throw new AppError(
+        500,
+        "CHECKOUT_URL_MISSING",
+        "Stripe did not return a Checkout URL"
+      );
+    }
+
+    const now = new Date();
+    const transaction: TransactionDocument = {
+      vendorId: vendor.id,
+      vendorEmail: vendor.email,
+      plan: PREMIUM_PLAN,
+      amount: plan.amount,
+      currency: plan.currency,
+      stripePriceId: plan.priceId,
+      stripeSessionId: session.id,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await transactions.insertOne(transaction);
+
+    res.status(201).json({
+      success: true,
+      message: "Checkout session created successfully",
+      data: { checkoutUrl: session.url },
+    });
   });
-});
+}
+
+export const createCheckoutSession = createCheckoutSessionController();

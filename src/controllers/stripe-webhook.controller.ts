@@ -1,10 +1,19 @@
+import { ObjectId, type Db } from "mongodb";
 import type { RequestHandler } from "express";
-import { MongoServerError, ObjectId } from "mongodb";
 import type Stripe from "stripe";
 
-import { getDatabase } from "../config/database.js";
 import { COLLECTIONS } from "../config/collections.js";
-import { getStripe } from "../config/stripe.js";
+import {
+  defaultPaymentDependencies,
+  type PaymentDependencies,
+} from "../config/payments.js";
+import {
+  assertSubscriptionMatchesPremiumPlan,
+  assertTransactionMatchesPlan,
+  PREMIUM_PLAN,
+  resolvePremiumPlan,
+  type PremiumPlanConfig,
+} from "../services/premium-plan.service.js";
 
 interface WebhookEventDocument {
   eventId: string;
@@ -13,7 +22,35 @@ interface WebhookEventDocument {
   updatedAt: Date;
 }
 
+interface WebhookContext {
+  db: Db;
+  stripe: Stripe;
+  plan: PremiumPlanConfig;
+  eventId: string;
+}
+
+interface TransactionRecord {
+  _id: ObjectId;
+  vendorId: string;
+  vendorEmail?: string;
+  plan?: unknown;
+  amount?: unknown;
+  currency?: unknown;
+  status?: string;
+  createdAt: Date;
+  stripeSubscriptionId?: string;
+}
+
 const RECLAIM_PROCESSING_AFTER_MS = 5 * 60 * 1000;
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === 11000
+  );
+}
 
 function getVendorObjectId(vendorId: string): ObjectId {
   if (!ObjectId.isValid(vendorId)) {
@@ -40,64 +77,76 @@ function getSubscriptionPeriodEnd(subscription: Stripe.Subscription): number {
 }
 
 function getSubscriptionStartedAt(subscription: Stripe.Subscription): number {
-  if (
-    !Number.isFinite(subscription.created) ||
-    subscription.created <= 0
-  ) {
+  if (!Number.isFinite(subscription.created) || subscription.created <= 0) {
     throw new Error("Subscription start date could not be determined");
   }
 
   return subscription.created;
 }
 
-function getWebhookEventsCollection() {
-  return getDatabase().collection<WebhookEventDocument>(
-    COLLECTIONS.webhookEvents
-  );
+function assertVendorAssociation(
+  vendorId: string,
+  metadata: Record<string, string> | undefined,
+  clientReferenceId: string | null | undefined
+): void {
+  if (clientReferenceId && clientReferenceId !== vendorId) {
+    throw new Error("Stripe Checkout vendor ID does not match the transaction");
+  }
+
+  if (metadata?.vendorId && metadata.vendorId !== vendorId) {
+    throw new Error("Stripe vendor ID does not match the transaction");
+  }
 }
 
-async function claimStripeEvent(eventId: string): Promise<boolean> {
+function getWebhookEventsCollection(db: Db) {
+  return db.collection<WebhookEventDocument>(COLLECTIONS.webhookEvents);
+}
+
+async function claimStripeEvent(db: Db, eventId: string): Promise<boolean> {
+  const events = getWebhookEventsCollection(db);
   const now = new Date();
   const staleProcessingBefore = new Date(
     now.getTime() - RECLAIM_PROCESSING_AFTER_MS
   );
 
+  const reclaimed = await events.findOneAndUpdate(
+    {
+      eventId,
+      $or: [
+        { status: "failed" },
+        { status: "processing", updatedAt: { $lt: staleProcessingBefore } },
+      ],
+    },
+    { $set: { status: "processing", updatedAt: now } },
+    { returnDocument: "after" }
+  );
+
+  if (reclaimed) return true;
+
   try {
-    const result = await getWebhookEventsCollection().updateOne(
-      {
-        eventId,
-        $or: [
-          { status: "failed" },
-          { status: "processing", updatedAt: { $lt: staleProcessingBefore } },
-        ],
-      },
-      {
-        $setOnInsert: { eventId, createdAt: now },
-        $set: { status: "processing", updatedAt: now },
-      },
-      { upsert: true }
-    );
-
-    return result.upsertedCount > 0 || result.matchedCount > 0;
+    await events.insertOne({
+      eventId,
+      status: "processing",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return true;
   } catch (error) {
-    if (error instanceof MongoServerError && error.code === 11000) {
-      return false;
-    }
-
+    if (isDuplicateKeyError(error)) return false;
     throw error;
   }
 }
 
-async function markStripeEventProcessed(eventId: string): Promise<void> {
-  await getWebhookEventsCollection().updateOne(
+async function markStripeEventProcessed(db: Db, eventId: string): Promise<void> {
+  await getWebhookEventsCollection(db).updateOne(
     { eventId, status: "processing" },
     { $set: { status: "processed", updatedAt: new Date() } }
   );
 }
 
-async function markStripeEventFailed(eventId: string): Promise<void> {
+async function markStripeEventFailed(db: Db, eventId: string): Promise<void> {
   try {
-    await getWebhookEventsCollection().updateOne(
+    await getWebhookEventsCollection(db).updateOne(
       { eventId, status: "processing" },
       { $set: { status: "failed", updatedAt: new Date() } }
     );
@@ -107,19 +156,12 @@ async function markStripeEventFailed(eventId: string): Promise<void> {
 }
 
 async function isLatestCompletedTransaction(
+  db: Db,
   vendorId: string,
-  transactionId: unknown,
-  createdAt: unknown
+  transactionId: ObjectId,
+  createdAt: Date
 ): Promise<boolean> {
-  if (!(transactionId instanceof ObjectId)) {
-    throw new Error("Transaction ID is invalid");
-  }
-
-  if (!(createdAt instanceof Date)) {
-    throw new Error("Transaction creation date is invalid");
-  }
-
-  const newerTransaction = await getDatabase()
+  const newerTransaction = await db
     .collection(COLLECTIONS.transactions)
     .findOne(
       {
@@ -137,12 +179,13 @@ async function isLatestCompletedTransaction(
 }
 
 async function activateVendor(
+  db: Db,
   vendorId: string,
   subscriptionId: string,
   periodEnd: number,
   startedAt: number
 ): Promise<void> {
-  const users = getDatabase().collection("user");
+  const users = db.collection("user");
   const vendorObjectId = getVendorObjectId(vendorId);
   const startedAtDate = new Date(startedAt * 1000);
 
@@ -150,6 +193,7 @@ async function activateVendor(
     {
       _id: vendorObjectId,
       role: "vendor",
+      isBlocked: { $ne: true },
       $or: [
         { stripeSubscriptionId: subscriptionId },
         { stripeSubscriptionStartedAt: { $exists: false } },
@@ -175,23 +219,24 @@ async function activateVendor(
     if (!vendor) {
       throw new Error("Vendor account was not found");
     }
+
+    console.info(`Skipping Premium activation for blocked vendor ${vendorId}`);
   }
 }
 
 async function deactivateVendor(
+  db: Db,
   vendorId: string,
   subscriptionId: string
 ): Promise<void> {
-  await getDatabase().collection("user").updateOne(
+  await db.collection("user").updateOne(
     {
       _id: getVendorObjectId(vendorId),
       role: "vendor",
       stripeSubscriptionId: subscriptionId,
     },
     {
-      $set: {
-        subscriptionPlan: "free",
-      },
+      $set: { subscriptionPlan: "free" },
       $unset: {
         subscriptionExpiresAt: "",
         stripeSubscriptionId: "",
@@ -202,7 +247,8 @@ async function deactivateVendor(
 }
 
 async function completeCheckout(
-  session: Stripe.Checkout.Session
+  session: Stripe.Checkout.Session,
+  ctx: WebhookContext
 ): Promise<void> {
   if (session.mode !== "subscription") return;
 
@@ -213,27 +259,39 @@ async function completeCheckout(
     return;
   }
 
-  const transactions = getDatabase().collection(COLLECTIONS.transactions);
+  if (session.metadata?.plan && session.metadata.plan !== PREMIUM_PLAN) {
+    throw new Error("Checkout Session does not belong to the Premium plan");
+  }
 
+  const transactions = ctx.db.collection<TransactionRecord>(COLLECTIONS.transactions);
   const transaction = await transactions.findOne({
     stripeSessionId: session.id,
   });
 
   if (!transaction) {
-    throw new Error("No transaction found for the Checkout Session");
+    console.info(`Ignoring Checkout Session without a transaction: ${session.id}`);
+    return;
   }
+
+  assertTransactionMatchesPlan(transaction, ctx.plan);
 
   const vendorId = String(transaction.vendorId);
 
+  assertVendorAssociation(
+    vendorId,
+    undefined,
+    session.client_reference_id
+  );
+
   if (
-    session.client_reference_id &&
-    session.client_reference_id !== vendorId
+    session.customer_email &&
+    transaction.vendorEmail &&
+    session.customer_email.toLowerCase() !== String(transaction.vendorEmail).toLowerCase()
   ) {
-    throw new Error("Checkout vendor ID does not match the stored transaction");
+    throw new Error("Checkout customer does not match the transaction vendor");
   }
 
   const subscriptionReference = session.subscription;
-
   const subscriptionId =
     typeof subscriptionReference === "string"
       ? subscriptionReference
@@ -243,36 +301,34 @@ async function completeCheckout(
     throw new Error("Checkout Session has no subscription ID");
   }
 
-  const subscription = await getStripe().subscriptions.retrieve(
-    subscriptionId
-  );
+  const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId);
 
-  if (!isActiveSubscription(subscription)) {
-    return;
-  }
+  assertSubscriptionMatchesPremiumPlan(subscription, ctx.plan);
+  assertVendorAssociation(vendorId, subscription.metadata, undefined);
 
-  if (
-    subscription.metadata.vendorId &&
-    subscription.metadata.vendorId !== vendorId
-  ) {
-    throw new Error("Subscription vendor ID does not match the stored transaction");
-  }
+  if (!isActiveSubscription(subscription)) return;
 
   const periodEnd = getSubscriptionPeriodEnd(subscription);
   const startedAt = getSubscriptionStartedAt(subscription);
+  const now = new Date();
 
   await transactions.updateOne(
-    { stripeSessionId: session.id },
+    { stripeSessionId: session.id, status: "pending" },
     {
       $set: {
         status: "completed",
         stripeSubscriptionId: subscription.id,
+        stripeEventId: ctx.eventId,
+        subscriptionPeriodStart: new Date(startedAt * 1000),
+        subscriptionPeriodEnd: new Date(periodEnd * 1000),
+        updatedAt: now,
       },
     }
   );
 
   if (
     !(await isLatestCompletedTransaction(
+      ctx.db,
       vendorId,
       transaction._id,
       transaction.createdAt
@@ -281,50 +337,46 @@ async function completeCheckout(
     return;
   }
 
-  await activateVendor(vendorId, subscription.id, periodEnd, startedAt);
+  await activateVendor(ctx.db, vendorId, subscription.id, periodEnd, startedAt);
 }
 
-async function expireCheckout(
-  session: Stripe.Checkout.Session
+async function failCheckout(
+  session: Stripe.Checkout.Session,
+  ctx: WebhookContext,
+  status: "failed" | "cancelled"
 ): Promise<void> {
-  await getDatabase()
-    .collection(COLLECTIONS.transactions)
-    .updateOne(
-      {
-        stripeSessionId: session.id,
-        status: "pending",
-      },
-      {
-        $set: {
-          status: "failed",
-        },
-      }
-    );
+  await ctx.db.collection(COLLECTIONS.transactions).updateOne(
+    { stripeSessionId: session.id, status: "pending" },
+    { $set: { status, stripeEventId: ctx.eventId, updatedAt: new Date() } }
+  );
 }
 
 async function syncSubscription(
-  subscription: Stripe.Subscription
+  subscription: Stripe.Subscription,
+  ctx: WebhookContext
 ): Promise<void> {
-  const transaction = await getDatabase()
-    .collection(COLLECTIONS.transactions)
-    .findOne({
-      stripeSubscriptionId: subscription.id,
-    });
+  const transactions = ctx.db.collection<TransactionRecord>(COLLECTIONS.transactions);
+  const transaction = await transactions.findOne({
+    stripeSubscriptionId: subscription.id,
+  });
 
-  if (!transaction) return;
+  if (!transaction) {
+    console.info(`Ignoring subscription without a transaction: ${subscription.id}`);
+    return;
+  }
 
   const vendorId = String(transaction.vendorId);
 
-  if (
-    subscription.metadata.vendorId &&
-    subscription.metadata.vendorId !== vendorId
-  ) {
-    throw new Error("Subscription vendor ID does not match the stored transaction");
-  }
+  assertSubscriptionMatchesPremiumPlan(subscription, ctx.plan);
+  assertVendorAssociation(vendorId, subscription.metadata, undefined);
+  assertTransactionMatchesPlan(transaction, ctx.plan);
+
+  const now = new Date();
 
   if (isActiveSubscription(subscription)) {
     if (
       !(await isLatestCompletedTransaction(
+        ctx.db,
         vendorId,
         transaction._id,
         transaction.createdAt
@@ -336,33 +388,106 @@ async function syncSubscription(
     const periodEnd = getSubscriptionPeriodEnd(subscription);
     const startedAt = getSubscriptionStartedAt(subscription);
 
-    await activateVendor(vendorId, subscription.id, periodEnd, startedAt);
+    await transactions.updateOne(
+      { _id: transaction._id },
+      {
+        $set: {
+          status: "completed",
+          stripeEventId: ctx.eventId,
+          subscriptionPeriodStart: new Date(startedAt * 1000),
+          subscriptionPeriodEnd: new Date(periodEnd * 1000),
+          updatedAt: now,
+        },
+      }
+    );
+
+    await activateVendor(ctx.db, vendorId, subscription.id, periodEnd, startedAt);
     return;
   }
 
-  await deactivateVendor(vendorId, subscription.id);
+  const nextStatus = subscription.status === "canceled" ? "cancelled" : "failed";
+
+  await transactions.updateOne(
+    { _id: transaction._id },
+    { $set: { status: nextStatus, stripeEventId: ctx.eventId, updatedAt: now } }
+  );
+
+  await deactivateVendor(ctx.db, vendorId, subscription.id);
 }
 
-async function processStripeEvent(event: Stripe.Event): Promise<void> {
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const legacy = (
+    invoice as Stripe.Invoice & {
+      subscription?: string | { id: string } | null;
+    }
+  ).subscription;
+  if (typeof legacy === "string") return legacy;
+  if (legacy && typeof legacy.id === "string") return legacy.id;
+
+  const details = invoice.parent?.subscription_details;
+  const reference = details?.subscription;
+  return typeof reference === "string" ? reference : (reference?.id ?? null);
+}
+
+async function handleInvoicePaymentSucceeded(
+  invoice: Stripe.Invoice,
+  ctx: WebhookContext
+): Promise<void> {
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
+  if (!subscriptionId) return;
+
+  const transaction = await ctx.db
+    .collection<TransactionRecord>(COLLECTIONS.transactions)
+    .findOne({ stripeSubscriptionId: subscriptionId });
+
+  if (!transaction) return;
+
+  const subscription = await ctx.stripe.subscriptions.retrieve(subscriptionId);
+  await syncSubscription(subscription, ctx);
+}
+
+async function handleInvoicePaymentFailed(
+  invoice: Stripe.Invoice,
+  ctx: WebhookContext
+): Promise<void> {
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
+  if (!subscriptionId) return;
+
+  await ctx.db.collection(COLLECTIONS.transactions).updateOne(
+    { stripeSubscriptionId: subscriptionId },
+    { $set: { status: "failed", stripeEventId: ctx.eventId, updatedAt: new Date() } }
+  );
+}
+
+async function processStripeEvent(
+  event: Stripe.Event,
+  ctx: WebhookContext
+): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed":
     case "checkout.session.async_payment_succeeded":
-      await completeCheckout(
-        event.data.object as Stripe.Checkout.Session
-      );
+      await completeCheckout(event.data.object as Stripe.Checkout.Session, ctx);
+      break;
+
+    case "checkout.session.async_payment_failed":
+      await failCheckout(event.data.object as Stripe.Checkout.Session, ctx, "failed");
       break;
 
     case "checkout.session.expired":
-      await expireCheckout(
-        event.data.object as Stripe.Checkout.Session
-      );
+      await failCheckout(event.data.object as Stripe.Checkout.Session, ctx, "cancelled");
       break;
 
     case "customer.subscription.updated":
     case "customer.subscription.deleted":
-      await syncSubscription(
-        event.data.object as Stripe.Subscription
-      );
+      await syncSubscription(event.data.object as Stripe.Subscription, ctx);
+      break;
+
+    case "invoice.payment_succeeded":
+      await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice, ctx);
+      break;
+
+    case "invoice.payment_failed":
+      await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice, ctx);
       break;
 
     default:
@@ -370,94 +495,94 @@ async function processStripeEvent(event: Stripe.Event): Promise<void> {
   }
 }
 
-export const stripeWebhookHandler: RequestHandler = async (
-  req,
-  res
-): Promise<void> => {
-  const signature = req.headers["stripe-signature"];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+export function createStripeWebhookHandler(
+  deps: PaymentDependencies = defaultPaymentDependencies
+): RequestHandler {
+  return async (req, res): Promise<void> => {
+    const signature = req.headers["stripe-signature"];
+    const webhookSecret = deps.getWebhookSecret();
 
-  if (!webhookSecret) {
-    console.error("STRIPE_WEBHOOK_SECRET is not configured");
-    res.status(500).json({
-      success: false,
-      message: "Webhook configuration is incomplete",
-    });
-    return;
-  }
-
-  if (typeof signature !== "string" || !Buffer.isBuffer(req.body)) {
-    res.status(400).json({
-      success: false,
-      message: "Invalid webhook request",
-    });
-    return;
-  }
-
-  let stripe: Stripe;
-
-  try {
-    stripe = getStripe();
-  } catch (error) {
-    console.error("Stripe client initialization failed:", error);
-    res.status(500).json({
-      success: false,
-      message: "Webhook configuration is incomplete",
-    });
-    return;
-  }
-
-  let event: Stripe.Event;
-
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      signature,
-      webhookSecret
-    );
-  } catch (error) {
-    console.error("Invalid Stripe webhook signature:", error);
-    res.status(400).json({
-      success: false,
-      message: "Invalid Stripe webhook signature",
-    });
-    return;
-  }
-
-  let claimed = false;
-
-  try {
-    claimed = await claimStripeEvent(event.id);
-
-    if (!claimed) {
-      console.info(`Skipping duplicate Stripe event: ${event.id}`);
-      res.status(200).json({
-        success: true,
-        received: true,
-        duplicate: true,
+    if (!webhookSecret) {
+      console.error("STRIPE_WEBHOOK_SECRET is not configured");
+      res.status(500).json({
+        success: false,
+        message: "Webhook configuration is incomplete",
       });
       return;
     }
 
-    await processStripeEvent(event);
-    await markStripeEventProcessed(event.id);
-
-    res.status(200).json({
-      success: true,
-      received: true,
-    });
-  } catch (error) {
-    console.error(`Stripe webhook processing failed for event ${event.id}:`, error);
-
-    if (claimed) {
-      await markStripeEventFailed(event.id);
+    if (typeof signature !== "string" || !Buffer.isBuffer(req.body)) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid webhook request",
+      });
+      return;
     }
 
-    if (!res.headersSent) {
+    let stripe: Stripe;
+
+    try {
+      stripe = deps.getStripeClient();
+    } catch (error) {
+      console.error("Stripe client initialization failed:", error);
       res.status(500).json({
         success: false,
-        message: "Webhook processing failed",
+        message: "Webhook configuration is incomplete",
       });
+      return;
     }
-  }
-};
+
+    let event: Stripe.Event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
+    } catch (error) {
+      console.error("Invalid Stripe webhook signature:", error);
+      res.status(400).json({
+        success: false,
+        message: "Invalid Stripe webhook signature",
+      });
+      return;
+    }
+
+    const db = deps.getDb();
+    let claimed = false;
+
+    try {
+      claimed = await claimStripeEvent(db, event.id);
+
+      if (!claimed) {
+        res.status(200).json({
+          success: true,
+          received: true,
+          duplicate: true,
+        });
+        return;
+      }
+
+      const plan = await resolvePremiumPlan(stripe, deps.getPriceId());
+      await processStripeEvent(event, { db, stripe, plan, eventId: event.id });
+      await markStripeEventProcessed(db, event.id);
+
+      res.status(200).json({
+        success: true,
+        received: true,
+      });
+    } catch (error) {
+      console.error(`Stripe webhook processing failed for event ${event.id}:`, error);
+
+      if (claimed) {
+        await markStripeEventFailed(db, event.id);
+      }
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: "Webhook processing failed",
+        });
+      }
+    }
+  };
+}
+
+export const stripeWebhookHandler = createStripeWebhookHandler();
