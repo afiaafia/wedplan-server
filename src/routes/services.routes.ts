@@ -1,6 +1,7 @@
 import { Router } from "express";
+import type { Db } from "mongodb";
 import {
-  getPublicServiceById,
+  createGetPublicServiceController,
   listFeaturedServices,
   listPublicServices,
 } from "../controllers/services.controller.js";
@@ -11,22 +12,26 @@ import {
   serviceIdParamSchema,
 } from "../validators/service.validator.js";
 
-export const servicesRouter = Router();
+export function createServicesRouter(db?: Db): Router {
+  const router = Router();
 
-servicesRouter.get(
-  "/",
-  validate(publicServicesQuerySchema, "query"),
-  listPublicServices
-);
+  router.get(
+    "/",
+    validate(publicServicesQuerySchema, "query"),
+    listPublicServices
+  );
 
-servicesRouter.get(
-  "/featured",
-  validate(featuredServicesQuerySchema, "query"),
-  listFeaturedServices
-);
+  router.get(
+    "/featured",
+    validate(featuredServicesQuerySchema, "query"),
+    listFeaturedServices
+  );
 
-servicesRouter.get(
-  "/:id",
-  validate(serviceIdParamSchema, "params"),
-  getPublicServiceById
-);
+  router.get(
+    "/:id",
+    validate(serviceIdParamSchema, "params"),
+    createGetPublicServiceController(db)
+  );
+
+  return router;
+}
