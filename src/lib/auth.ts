@@ -77,6 +77,16 @@ export function createAuth() {
           required: false,
           input: false,
         },
+        stripeSubscriptionId: {
+          type: "string",
+          required: false,
+          input: false,
+        },
+        stripeSubscriptionStartedAt: {
+          type: "date",
+          required: false,
+          input: false,
+        },
       },
     },
     databaseHooks: {

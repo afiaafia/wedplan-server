@@ -63,5 +63,13 @@ export async function createDatabaseIndexes(): Promise<void> {
     },
   ]);
 
+  await db.collection(COLLECTIONS.webhookEvents).createIndexes([
+    {
+      key: { eventId: 1 },
+      name: "webhook_event_id",
+      unique: true,
+    },
+  ]);
+
   console.log("Database indexes created successfully");
 }

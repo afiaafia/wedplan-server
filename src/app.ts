@@ -4,6 +4,8 @@ import helmet from "helmet";
 import { toNodeHandler } from "better-auth/node";
 import type { Auth } from "./lib/auth.js";
 import { servicesRouter } from "./routes/services.routes.js";
+import { createSubscriptionRouter } from "./routes/subscription.routes.js";
+import { stripeWebhookHandler } from "./controllers/stripe-webhook.controller.js";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
 
 export function createApp(auth: Auth) {
@@ -21,6 +23,12 @@ export function createApp(auth: Auth) {
   // Better Auth must be mounted before express.json().
   app.all("/api/auth/*splat", toNodeHandler(auth));
 
+  app.post(
+    "/api/stripe/webhook",
+    express.raw({ type: "application/json" }),
+    stripeWebhookHandler
+  );
+
   app.use(express.json());
 
   // Redirect root requests to the frontend client
@@ -36,6 +44,7 @@ export function createApp(auth: Auth) {
   });
 
   app.use("/api/services", servicesRouter);
+  app.use("/api/subscriptions", createSubscriptionRouter(auth));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
