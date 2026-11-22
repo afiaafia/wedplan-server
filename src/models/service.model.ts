@@ -14,6 +14,7 @@ import type {
   FeaturedService,
   FeaturedServicesData,
   FeaturedVendor,
+  AdminService,
   PublicService,
   PublicServiceSort,
   ServiceDetail,
@@ -88,6 +89,11 @@ interface FeaturedVendorDocument {
   name?: unknown;
   image?: unknown;
   businessName?: unknown;
+}
+
+interface AdminVendorDocument {
+  name?: unknown;
+  email?: unknown;
 }
 
 function escapeRegex(value: string): string {
@@ -663,9 +669,37 @@ export async function findVendorServicesPage(
 export async function findServicesForReviewPage(
   query: AdminServicesQuery,
   db: Db = getDatabase()
-): Promise<{ services: VendorService[]; meta: PaginationMeta }> {
+): Promise<{ services: AdminService[]; meta: PaginationMeta }> {
   const collection = db.collection<ServiceDocument>(COLLECTIONS.services);
   const filter = buildManagedServiceFilter(query);
+  const vendorSearch = query.vendor?.trim();
+
+  if (vendorSearch) {
+    const pattern = new RegExp(escapeRegex(vendorSearch), "i");
+    const matchingVendors = await db
+      .collection<AdminVendorDocument>("user")
+      .find(
+        {
+          $and: [
+            { $or: [{ roles: "vendor" }, { role: "vendor" }] },
+            { $or: [{ name: pattern }, { email: pattern }] },
+          ],
+        },
+        { projection: { _id: 1 } }
+      )
+      .toArray();
+    const vendorIds = matchingVendors.map((vendor) => vendor._id.toString());
+
+    if (vendorIds.length === 0) {
+      return {
+        services: [],
+        meta: buildPaginationMeta(query.page, query.limit, 0),
+      };
+    }
+
+    filter.vendorId = { $in: vendorIds };
+  }
+
   const [documents, total] = await Promise.all([
     collection
       .find(filter)
@@ -676,17 +710,42 @@ export async function findServicesForReviewPage(
     collection.countDocuments(filter),
   ]);
 
-  const vendorDocuments = await findVendorDocuments(documents, db);
+  const vendorIds = Array.from(
+    new Set(
+      documents
+        .map((document) => document.vendorId)
+        .filter(
+          (id): id is string => typeof id === "string" && ObjectId.isValid(id)
+        )
+    )
+  ).map((id) => new ObjectId(id));
+  const vendorDocuments = vendorIds.length
+    ? await db
+        .collection<AdminVendorDocument>("user")
+        .find(
+          { _id: { $in: vendorIds } },
+          { projection: { name: 1, email: 1 } }
+        )
+        .toArray()
+    : [];
   const vendorsById = new Map(
     vendorDocuments.map((vendor) => [vendor._id.toString(), vendor])
   );
 
   return {
     services: documents.map((document) => {
-      const service = toVendorService(document);
+      const service: AdminService = {
+        ...toVendorService(document),
+        ...(typeof document.vendorId === "string"
+          ? { vendorId: document.vendorId }
+          : {}),
+      };
       const vendor = vendorsById.get(document.vendorId);
       if (typeof vendor?.name === "string" && vendor.name.trim()) {
         service.vendorName = vendor.name;
+      }
+      if (typeof vendor?.email === "string" && vendor.email.trim()) {
+        service.vendorEmail = vendor.email;
       }
       return service;
     }),

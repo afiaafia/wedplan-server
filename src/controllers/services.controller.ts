@@ -9,36 +9,38 @@ import type {
   PublicServicesQuery,
 } from "../validators/service.validator.js";
 
-export const listPublicServices = asyncHandler(async (_req, res) => {
-  const query = getValidated<PublicServicesQuery>(res);
+export function createListPublicServicesController(db?: Db) {
+  return asyncHandler(async (_req, res) => {
+    const query = getValidated<PublicServicesQuery>(res);
 
-  let result;
-  try {
-    result = await findPublicServices(query);
-  } catch {
-    throw new AppError(
-      500,
-      "SERVICES_UNAVAILABLE",
-      "Unable to load services right now."
-    );
-  }
+    let result;
+    try {
+      result = await findPublicServices(query, db);
+    } catch {
+      throw new AppError(
+        500,
+        "SERVICES_UNAVAILABLE",
+        "Unable to load services right now."
+      );
+    }
 
-  const { services, total } = result;
-  const totalPages = Math.ceil(total / query.limit);
+    const { services, total } = result;
+    const totalPages = Math.ceil(total / query.limit);
 
-  res.status(200).json({
-    success: true,
-    data: services,
-    meta: {
-      page: query.page,
-      limit: query.limit,
-      total,
-      totalPages,
-      hasNextPage: query.page < totalPages,
-      hasPreviousPage: query.page > 1,
-    },
+    res.status(200).json({
+      success: true,
+      data: services,
+      meta: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages,
+        hasNextPage: query.page < totalPages,
+        hasPreviousPage: query.page > 1,
+      },
+    });
   });
-});
+}
 
 export const listFeaturedServices = asyncHandler(async (_req, res) => {
   const { limit } = getValidated<FeaturedServicesQuery>(res);

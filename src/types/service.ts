@@ -75,6 +75,11 @@ export interface VendorService extends PublicService {
   updatedAt: string;
 }
 
+export interface AdminService extends VendorService {
+  vendorId?: string;
+  vendorEmail?: string;
+}
+
 export interface VendorServiceInput {
   title: string;
   category: ServiceCategory;

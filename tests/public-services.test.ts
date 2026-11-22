@@ -521,8 +521,18 @@ test("database errors reject and are converted to a safe 500 envelope", async ()
   assert.equal(JSON.stringify(res.body).includes("database-password"), false);
 });
 
-test("public endpoint is accessible without authentication and validates queries", async (t) => {
-  const server = createApp({} as Auth).listen(0);
+test("public listing validation remains unauthenticated and detail API requires a session", async (t) => {
+  const service = serviceDocument();
+  const { db } = createFakeDb({
+    services: [service],
+    vendors: [{ _id: vendorOneId, name: "Ada Events" }],
+  });
+  const guestAuth = {
+    api: {
+      getSession: async () => null,
+    },
+  } as unknown as Auth;
+  const server = createApp(guestAuth, { db }).listen(0);
   t.after(() => {
     server.closeAllConnections();
     server.close();
@@ -530,6 +540,29 @@ test("public endpoint is accessible without authentication and validates queries
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address() as AddressInfo;
   const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const listing = await fetch(
+    `${baseUrl}/api/services?q=Garden&category=Photography&location=Dhaka&sort=price_asc`
+  );
+  assert.equal(listing.status, 200);
+  const listingBody = (await listing.json()) as {
+    success: boolean;
+    data: RecordValue[];
+  };
+  assert.equal(listingBody.success, true);
+  assert.equal(listingBody.data.length, 1);
+  assert.equal(listingBody.data[0]?.title, "Garden Photographer");
+
+  const detail = await fetch(
+    `${baseUrl}/api/services/${service._id.toHexString()}`
+  );
+  assert.equal(detail.status, 401);
+  const detailBody = (await detail.json()) as {
+    data?: unknown;
+    error: { code: string };
+  };
+  assert.equal(detailBody.error.code, "UNAUTHORIZED");
+  assert.equal(detailBody.data, undefined);
 
   const invalid = await fetch(`${baseUrl}/api/services?category=Invalid`);
   assert.equal(invalid.status, 400);

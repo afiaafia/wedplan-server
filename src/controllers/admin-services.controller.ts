@@ -1,29 +1,18 @@
 import { AppError } from "../errors/app-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { getValidated } from "../middleware/validate.js";
-import {
-  findServicesForReview,
-  findServicesForReviewPage,
-  setServiceApprovalStatus,
-} from "../models/service.model.js";
-import type { AdminServicesQuery } from "../validators/dashboard.validator.js";
+import { findServicesForReviewPage, setServiceApprovalStatus } from "../models/service.model.js";
 import type {
-  SetServiceApprovalBody,
-  VendorServicesQuery,
-} from "../validators/service.validator.js";
+  AdminServiceApprovalBody,
+  AdminServicesQuery,
+} from "../validators/dashboard.validator.js";
 
 interface ServiceApprovalBody {
   id: string;
 }
 
 export const listServicesForReview = asyncHandler(async (req, res) => {
-  if (Object.keys(req.query).length === 0) {
-    const services = await findServicesForReview();
-    res.status(200).json({ success: true, data: services });
-    return;
-  }
-
-  const query = getValidated<AdminServicesQuery & VendorServicesQuery>(res);
+  const query = getValidated<AdminServicesQuery>(res);
   const result = await findServicesForReviewPage(query);
 
   res.status(200).json({
@@ -36,7 +25,7 @@ export const listServicesForReview = asyncHandler(async (req, res) => {
 export const updateServiceApproval = asyncHandler(async (_req, res) => {
   const { id } = getValidated<ServiceApprovalBody>(res);
   const { approvalStatus, rejectionReason } =
-    getValidated<SetServiceApprovalBody>(res);
+    getValidated<AdminServiceApprovalBody>(res);
 
   const service = await setServiceApprovalStatus(
     id,

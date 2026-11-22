@@ -191,7 +191,8 @@ export async function releaseServiceSlot(
 
 export async function withVendorServiceMutation<T>(
   vendorId: string,
-  mutation: (context: ServiceMutationContext) => Promise<T>
+  mutation: (context: ServiceMutationContext) => Promise<T>,
+  allowBlockedVendor = false
 ): Promise<T> {
   const objectId = toVendorObjectId(vendorId);
   const session = getMongoClient().startSession();
@@ -205,7 +206,7 @@ export async function withVendorServiceMutation<T>(
             {
               _id: objectId,
               roles: "vendor",
-              isBlocked: { $ne: true },
+              ...(allowBlockedVendor ? {} : { isBlocked: { $ne: true } }),
             },
             {
               projection: {
@@ -259,6 +260,23 @@ export async function setVendorServiceActiveWithLimit(
   id: string,
   isActive: boolean
 ): Promise<VendorService | null> {
+  return setServiceActiveWithLimit(vendorId, id, isActive, false);
+}
+
+export async function setAdminServiceActiveWithLimit(
+  vendorId: string,
+  id: string,
+  isActive: boolean
+): Promise<VendorService | null> {
+  return setServiceActiveWithLimit(vendorId, id, isActive, !isActive);
+}
+
+async function setServiceActiveWithLimit(
+  vendorId: string,
+  id: string,
+  isActive: boolean,
+  allowBlockedVendor: boolean
+): Promise<VendorService | null> {
   return withVendorServiceMutation(vendorId, async ({ session, plan, counterStore }) => {
     const existing = await findVendorServiceById(vendorId, id, session);
     if (!existing) return null;
@@ -283,5 +301,5 @@ export async function setVendorServiceActiveWithLimit(
     }
 
     return updated;
-  });
+  }, allowBlockedVendor);
 }

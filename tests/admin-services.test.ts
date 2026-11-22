@@ -11,11 +11,16 @@ import {
   requireAdmin,
 } from "../src/middleware/require-admin.js";
 import {
+  createModerateServiceActiveHandler,
+} from "../src/controllers/admin-service-actions.controller.js";
+import {
   findServicesForReview,
+  findServicesForReviewPage,
   setServiceApprovalStatus,
 } from "../src/models/service.model.js";
 import { createAdminServicesRouter } from "../src/routes/admin-services.routes.js";
-import type { ServiceDocument } from "../src/types/service.js";
+import type { ServiceDocument, VendorService } from "../src/types/service.js";
+import { adminServiceApprovalSchema } from "../src/validators/dashboard.validator.js";
 import { setServiceApprovalSchema } from "../src/validators/service.validator.js";
 
 const adminSession = {
@@ -112,6 +117,24 @@ test("approval validator rejects ownership, activation, and unknown fields", () 
   }
 });
 
+test("Admin approval accepts only a pending service decision", () => {
+  assert.equal(
+    adminServiceApprovalSchema.safeParse({ approvalStatus: "pending" }).success,
+    false
+  );
+  assert.equal(
+    adminServiceApprovalSchema.safeParse({ approvalStatus: "rejected" }).success,
+    false
+  );
+  assert.equal(
+    adminServiceApprovalSchema.safeParse({
+      approvalStatus: "rejected",
+      rejectionReason: "Please add original portfolio images",
+    }).success,
+    true
+  );
+});
+
 test("review list returns real service documents from the services collection", async () => {
   const pending = serviceDocument();
   const approved = serviceDocument({
@@ -192,6 +215,129 @@ test("approval changes only approvalStatus, never activation or ownership", asyn
   assert.equal(await setServiceApprovalStatus("not-an-object-id", "approved", db), null);
 });
 
+test("Admin service activation delegates to the capacity-enforced mutation", async () => {
+  const serviceId = "65b000000000000000000001";
+  const vendorId = "507f1f77bcf86cd799439012";
+  const calls: unknown[][] = [];
+  const service: VendorService = {
+    id: serviceId,
+    title: "Garden Photographer",
+    category: "Photography",
+    description: "Documenting the day",
+    location: "Lagos",
+    price: 450000,
+    images: [],
+    approvalStatus: "approved",
+    isActive: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  };
+  const handler = createModerateServiceActiveHandler({
+    findServiceVendorId: async (id) => {
+      calls.push(["owner", id]);
+      return vendorId;
+    },
+    setServiceActive: async (...args) => {
+      calls.push(["capacityMutation", ...args]);
+      return service;
+    },
+  });
+
+  let statusCode = 0;
+  let body: unknown;
+  await new Promise<void>((resolve, reject) => {
+    const response = {
+      locals: { validated: { id: serviceId, isActive: true } },
+      status(value: number) {
+        statusCode = value;
+        return this;
+      },
+      json(value: unknown) {
+        body = value;
+        resolve();
+        return this;
+      },
+    } as unknown as Response;
+
+    handler({} as Request, response, (error?: unknown) => {
+      if (error) reject(error);
+    });
+  });
+
+  assert.equal(statusCode, 200);
+  assert.deepEqual(calls, [
+    ["owner", serviceId],
+    ["capacityMutation", vendorId, serviceId, true],
+  ]);
+  assert.deepEqual(body, {
+    success: true,
+    message: "Service activated",
+    data: service,
+  });
+});
+
+test("Admin service filtering resolves vendor names and emails without exposing them publicly", async () => {
+  const document = serviceDocument();
+  const vendor = {
+    _id: new ObjectId(document.vendorId),
+    name: "Camille Studio",
+    email: "camille@example.com",
+  };
+  let serviceFilter: Record<string, unknown> | undefined;
+  const db = {
+    collection(name: string) {
+      if (name === "user") {
+        return {
+          find() {
+            return { toArray: async () => [vendor] };
+          },
+        };
+      }
+
+      return {
+        find(filter: Record<string, unknown>) {
+          serviceFilter = filter;
+          const cursor = {
+            sort() {
+              return cursor;
+            },
+            skip() {
+              return cursor;
+            },
+            limit() {
+              return cursor;
+            },
+            async toArray() {
+              return [document];
+            },
+          };
+          return cursor;
+        },
+        async countDocuments() {
+          return 1;
+        },
+      };
+    },
+  } as unknown as Db;
+
+  const result = await findServicesForReviewPage(
+    {
+      q: undefined,
+      vendor: "camille@example.com",
+      approvalStatus: undefined,
+      isActive: "all",
+      category: undefined,
+      page: 1,
+      limit: 10,
+    },
+    db
+  );
+
+  assert.deepEqual(serviceFilter?.vendorId, { $in: [vendor._id.toString()] });
+  assert.equal(result.services[0]?.vendorName, vendor.name);
+  assert.equal(result.services[0]?.vendorEmail, vendor.email);
+});
+
 test("admin routes reject non-admin sessions before touching the database", async (t) => {
   const app = (await import("../src/app.js")).createApp({
     api: {
@@ -223,6 +369,46 @@ test("admin routes reject non-admin sessions before touching the database", asyn
     }
   );
   assert.equal(approvalResponse.status, 403);
+});
+
+test("Admin dashboard rejects guests, customers, and vendors", async (t) => {
+  const cases = [
+    { role: "guest", session: null, status: 401 },
+    {
+      role: "customer",
+      session: {
+        ...adminSession,
+        user: { ...adminSession.user, role: "customer" },
+      },
+      status: 403,
+    },
+    {
+      role: "vendor",
+      session: {
+        ...adminSession,
+        user: { ...adminSession.user, role: "vendor" },
+      },
+      status: 403,
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const app = (await import("../src/app.js")).createApp({
+      api: { getSession: async () => item.session },
+    } as unknown as Auth);
+    const server = app.listen(0);
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const response = await fetch(`${baseUrl}/api/admin/dashboard`);
+
+    assert.equal(response.status, item.status, item.role);
+    const body = (await response.json()) as { success: boolean };
+    assert.equal(body.success, false, item.role);
+  }
 });
 
 test("admin router exports approval and listing routes", () => {

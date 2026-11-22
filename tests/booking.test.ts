@@ -201,6 +201,14 @@ function mockAuth(userOverrides: Record<string, unknown> = {}): Auth {
   } as unknown as Auth;
 }
 
+function unauthenticatedAuth(): Auth {
+  return {
+    api: {
+      getSession: async () => null,
+    },
+  } as unknown as Auth;
+}
+
 async function startServer(
   t: TestContext,
   auth: Auth,
@@ -688,7 +696,7 @@ test("POST /api/bookings maps database failures to a generic server error", asyn
   });
 });
 
-test("GET /api/services/:id serves an approved active service with public vendor fields", async (t) => {
+test("GET /api/services/:id serves details to authenticated customers, vendors, and admins", async (t) => {
   const { db } = createFakeDb({
     vendors: [
       {
@@ -701,27 +709,48 @@ test("GET /api/services/:id serves an approved active service with public vendor
       },
     ],
   });
-  const baseUrl = await startServer(t, {} as Auth, db);
+  for (const role of ["customer", "vendor", "admin"] as const) {
+    const auth = mockAuth({ role, roles: [role] });
+    const baseUrl = await startServer(t, auth, db);
+    const result = await getService(baseUrl, SERVICE_ID);
+
+    assert.equal(result.status, 200, role);
+    assert.equal(result.body.success, true, role);
+    const data = result.body.data as Record<string, unknown>;
+    assert.equal(data.title, "Elegant Wedding Photography", role);
+    assert.deepEqual(data.images, ["https://i.imgbb.com/photo.png"], role);
+    assert.deepEqual(
+      data.vendor,
+      {
+        id: VENDOR_ID,
+        name: "Ayesha Khan",
+        businessName: "Elegant Moments",
+        profileImage: "https://i.imgbb.com/avatar.png",
+      },
+      role
+    );
+    assert.equal(JSON.stringify(data).includes("private@example.com"), false, role);
+  }
+});
+
+test("GET /api/services/:id returns 401 without a session and does not expose details", async (t) => {
+  const { db } = createFakeDb();
+  const baseUrl = await startServer(t, unauthenticatedAuth(), db);
 
   const result = await getService(baseUrl, SERVICE_ID);
 
-  assert.equal(result.status, 200);
-  assert.equal(result.body.success, true);
-  const data = result.body.data as Record<string, unknown>;
-  assert.equal(data.title, "Elegant Wedding Photography");
-  assert.deepEqual(data.images, ["https://i.imgbb.com/photo.png"]);
-  assert.deepEqual(data.vendor, {
-    id: VENDOR_ID,
-    name: "Ayesha Khan",
-    businessName: "Elegant Moments",
-    profileImage: "https://i.imgbb.com/avatar.png",
+  assert.equal(result.status, 401);
+  assert.equal(result.body.success, false);
+  assert.equal(result.body.data, undefined);
+  assert.deepEqual(result.body.error, {
+    message: "Please sign in to continue",
+    code: "UNAUTHORIZED",
   });
-  assert.equal(JSON.stringify(data).includes("private@example.com"), false);
 });
 
 test("GET /api/services/:id rejects invalid ids and hides unavailable services", async (t) => {
   const invalidDb = createFakeDb().db;
-  const invalidBaseUrl = await startServer(t, {} as Auth, invalidDb);
+  const invalidBaseUrl = await startServer(t, mockAuth(), invalidDb);
   const invalid = await getService(invalidBaseUrl, "not-an-object-id");
 
   assert.equal(invalid.status, 400);
@@ -738,7 +767,7 @@ test("GET /api/services/:id rejects invalid ids and hides unavailable services",
 
   for (const [services, label] of unavailable) {
     const { db } = createFakeDb({ services });
-    const baseUrl = await startServer(t, {} as Auth, db);
+    const baseUrl = await startServer(t, mockAuth(), db);
     const result = await getService(baseUrl, SERVICE_ID);
 
     assert.equal(result.status, 404, label);

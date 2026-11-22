@@ -6,11 +6,11 @@ import {
 import type { Auth } from "../lib/auth.js";
 import { requireAdmin } from "../middleware/require-admin.js";
 import { validate } from "../middleware/validate.js";
-import { adminServicesQuerySchema } from "../validators/dashboard.validator.js";
 import {
-  serviceIdParamSchema,
-  setServiceApprovalSchema,
-} from "../validators/service.validator.js";
+  adminServiceApprovalSchema,
+  adminServicesQuerySchema,
+  mongoIdParamSchema,
+} from "../validators/dashboard.validator.js";
 
 export function createAdminServicesRouter(auth: Auth) {
   const router = Router();
@@ -25,8 +25,8 @@ export function createAdminServicesRouter(auth: Auth) {
 
   router.patch(
     "/:id/approval",
-    validate(serviceIdParamSchema, "params"),
-    validate(setServiceApprovalSchema, "body"),
+    validate(mongoIdParamSchema, "params"),
+    validate(adminServiceApprovalSchema, "body"),
     updateServiceApproval
   );
 

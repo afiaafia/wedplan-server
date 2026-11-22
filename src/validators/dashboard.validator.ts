@@ -43,10 +43,28 @@ export const userBlockedSchema = z
 
 export const adminServicesQuerySchema = paginationQuerySchema.extend({
   q: z.string().trim().max(100).optional(),
+  vendor: z.string().trim().max(100).optional(),
   approvalStatus: z.enum(["pending", "approved", "rejected"]).optional(),
   isActive: z.enum(["all", "true", "false"]).default("all"),
   category: z.enum(SERVICE_CATEGORIES).optional(),
 });
+
+export const adminServiceApprovalSchema = z
+  .object({
+    approvalStatus: z.enum(["approved", "rejected"]),
+    rejectionReason: z.string().trim().min(5).max(500).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.approvalStatus !== "rejected" ||
+      (typeof value.rejectionReason === "string" &&
+        value.rejectionReason.trim().length >= 5),
+    {
+      message: "A rejection reason of at least 5 characters is required",
+      path: ["rejectionReason"],
+    }
+  );
 
 export const adminServiceActiveSchema = z
   .object({
@@ -92,6 +110,9 @@ export type BookingStatusAction = z.infer<typeof bookingStatusActionSchema>;
 export type AdminUsersQuery = z.infer<typeof adminUsersQuerySchema>;
 export type UserBlockedBody = z.infer<typeof userBlockedSchema>;
 export type AdminServicesQuery = z.infer<typeof adminServicesQuerySchema>;
+export type AdminServiceApprovalBody = z.infer<
+  typeof adminServiceApprovalSchema
+>;
 export type AdminServiceActiveBody = z.infer<typeof adminServiceActiveSchema>;
 export type AdminBookingsQuery = z.infer<typeof adminBookingsQuerySchema>;
 export type AdminTransactionsQuery = z.infer<

@@ -1,9 +1,11 @@
 import { Router } from "express";
 import type { Db } from "mongodb";
+import type { Auth } from "../lib/auth.js";
+import { requireSession } from "../middleware/require-auth.js";
 import {
+  createListPublicServicesController,
   createGetPublicServiceController,
   listFeaturedServices,
-  listPublicServices,
 } from "../controllers/services.controller.js";
 import { validate } from "../middleware/validate.js";
 import {
@@ -12,13 +14,13 @@ import {
   serviceIdParamSchema,
 } from "../validators/service.validator.js";
 
-export function createServicesRouter(db?: Db): Router {
+export function createServicesRouter(auth: Auth, db?: Db): Router {
   const router = Router();
 
   router.get(
     "/",
     validate(publicServicesQuerySchema, "query"),
-    listPublicServices
+    createListPublicServicesController(db)
   );
 
   router.get(
@@ -29,6 +31,7 @@ export function createServicesRouter(db?: Db): Router {
 
   router.get(
     "/:id",
+    requireSession(auth),
     validate(serviceIdParamSchema, "params"),
     createGetPublicServiceController(db)
   );

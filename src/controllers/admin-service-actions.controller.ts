@@ -4,12 +4,20 @@ import { getValidated } from "../middleware/validate.js";
 import {
   deleteServiceById,
   findServiceVendorId,
-  setServiceActiveById,
 } from "../models/service.model.js";
-import { reconcileServiceCounter } from "../services/service-capacity.service.js";
+import {
+  reconcileServiceCounter,
+  setAdminServiceActiveWithLimit,
+} from "../services/service-capacity.service.js";
 import type { AdminServiceActiveBody } from "../validators/dashboard.validator.js";
+import type { VendorService } from "../types/service.js";
 
 type ServiceIdParams = { id: string };
+
+export interface AdminServiceActivationDependencies {
+  findServiceVendorId: typeof findServiceVendorId;
+  setServiceActive: typeof setAdminServiceActiveWithLimit;
+}
 
 async function serviceOwner(id: string): Promise<string> {
   const vendorId = await findServiceVendorId(id);
@@ -19,25 +27,39 @@ async function serviceOwner(id: string): Promise<string> {
   return vendorId;
 }
 
-export const moderateServiceActive = asyncHandler(async (_req, res) => {
-  const { id } = getValidated<ServiceIdParams>(res);
-  const { isActive } = getValidated<AdminServiceActiveBody>(res);
-
-  const vendorId = await serviceOwner(id);
-  const service = await setServiceActiveById(id, isActive);
-
-  if (!service) {
-    throw new AppError(404, "SERVICE_NOT_FOUND", "Service not found");
+export function createModerateServiceActiveHandler(
+  dependencies: AdminServiceActivationDependencies = {
+    findServiceVendorId,
+    setServiceActive: setAdminServiceActiveWithLimit,
   }
+) {
+  return asyncHandler(async (_req, res) => {
+    const { id } = getValidated<ServiceIdParams>(res);
+    const { isActive } = getValidated<AdminServiceActiveBody>(res);
 
-  await reconcileServiceCounter(vendorId);
+    const vendorId = await dependencies.findServiceVendorId(id);
+    if (!vendorId) {
+      throw new AppError(404, "SERVICE_NOT_FOUND", "Service not found");
+    }
+    const service: VendorService | null = await dependencies.setServiceActive(
+      vendorId,
+      id,
+      isActive
+    );
 
-  res.status(200).json({
-    success: true,
-    message: isActive ? "Service activated" : "Service deactivated",
-    data: service,
+    if (!service) {
+      throw new AppError(404, "SERVICE_NOT_FOUND", "Service not found");
+    }
+
+    res.status(200).json({
+      success: true,
+      message: isActive ? "Service activated" : "Service deactivated",
+      data: service,
+    });
   });
-});
+}
+
+export const moderateServiceActive = createModerateServiceActiveHandler();
 
 export const deleteAdminService = asyncHandler(async (_req, res) => {
   const { id } = getValidated<ServiceIdParams>(res);
