@@ -45,7 +45,8 @@ Use pnpm only.
 | `pnpm start` | Run the compiled server |
 | `pnpm typecheck` | Run TypeScript without emitting files |
 | `pnpm lint` | Run ESLint |
-| `pnpm test` | Run 18 backend test files (144 tests in the latest audit) |
+| `pnpm test` | Run the backend test suite |
+| `pnpm admin:bootstrap` | Interactively provision the first Admin for an existing account |
 | `pnpm seed:featured` | Development-only featured-service seeder; refuses production unless `ALLOW_PRODUCTION_FEATURED_SEED=true` |
 
 ## API overview
@@ -64,6 +65,32 @@ Use pnpm only.
 
 Error responses use `{ "success": false, "error": { "code", "message", "details?" } }`. Validation is strict: client-supplied ownership, role, approval, subscription, and status fields are rejected.
 
+## Admin dashboard and first-Admin setup
+
+The Admin overview reports user, blocked-user, service-approval, booking-status,
+and transaction-status counts. Completed transaction totals are grouped by
+currency; currencies are never combined. Admin service search can match a
+vendor's name or email, and Admin-only service and transaction responses include
+vendor contact details. Transaction records expose their Stripe provider and
+stored subscription reference, but transaction status remains read-only and
+webhook-controlled. Admin service activation uses the same atomic subscription
+capacity enforcement as vendor activation.
+
+Admin access is never granted through registration or a public API. To create
+the initial Admin:
+
+1. Create and verify the intended account through the existing sign-in flow.
+2. Set `WEDPLAN_INITIAL_ADMIN_EMAIL` to that account's email in the operator's
+   local environment; do not commit a real email or credentials.
+3. Run `pnpm admin:bootstrap` from the server directory and type the exact
+   normalized email shown at the interactive confirmation prompt.
+
+The command refuses non-interactive use, missing, blocked, or unverified
+accounts, and any database that already contains an Admin. It preserves
+existing account roles and exposes no HTTP endpoint. Any later Admin grants
+require a separately controlled operator procedure; the first-Admin command is
+intentionally one-time.
+
 ## Environment variables
 
 See `.env.example` for the full template. Never commit real values.
@@ -81,6 +108,19 @@ See `.env.example` for the full template. Never commit real values.
 | `IMGBB_API_KEY` | Server-only ImgBB upload key |
 | `RESEND_API_KEY`, `PASSWORD_RESET_FROM_EMAIL` | Password-reset email delivery |
 | `ALLOW_PRODUCTION_FEATURED_SEED` | Explicit opt-in escape hatch for the dev seeder; leave unset |
+| `WEDPLAN_JWT_SECRET` | Optional 32-character minimum server-only secret for short-lived API bearer tokens |
+| `WEDPLAN_JWT_ISSUER` | Optional JWT issuer override; defaults to `BETTER_AUTH_URL` |
+| `WEDPLAN_INITIAL_ADMIN_EMAIL` | Existing verified account targeted only by the interactive one-time Admin bootstrap command |
+
+## JWT API bearer authentication
+
+WedPlan keeps Better Auth sessions for login, Google OAuth, cookies, and browser authentication. Express also supports short-lived HS256 bearer tokens for protected APIs:
+
+- `POST /api/me/token` requires an active Better Auth session and returns a 15-minute bearer token.
+- Tokens contain only the user ID and authorization claims; protected middleware verifies signature, issuer, audience, and expiration.
+- Every bearer request re-reads the MongoDB user record to enforce current blocked and role state.
+- Invalid, malformed, expired, and insufficient-role bearer requests return `401` or `403`.
+- Set `WEDPLAN_JWT_SECRET` in server-only environment variables, or set it to a dedicated secret separate from `BETTER_AUTH_SECRET`.
 
 ## MongoDB setup
 
