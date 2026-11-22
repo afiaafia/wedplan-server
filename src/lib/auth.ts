@@ -1,10 +1,11 @@
 import { betterAuth, type BetterAuthPlugin } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware, getOAuthState } from "better-auth/api";
 import { mongodbAdapter } from "@better-auth/mongo-adapter";
 import { ObjectId } from "mongodb";
 import { getDatabase, getMongoClient } from "../config/database.js";
 import { getAllowedClientOrigins } from "../config/client-origins.js";
 import { sendPasswordResetEmail } from "./password-reset-email.js";
+import { BETTER_AUTH_CLIENT_IP_HEADER } from "../middleware/better-auth-client-ip.js";
 import {
   assertRegistrationRole,
   resolveRegistrationRole,
@@ -215,6 +216,37 @@ function createRegistrationPolicyPlugin(): BetterAuthPlugin {
         },
         {
           matcher(context) {
+            return context.path === "/sign-in/social";
+          },
+          handler: createAuthMiddleware(async (context) => {
+            const body = (context.body ?? {}) as Record<string, unknown>;
+            const additionalData = body.additionalData;
+
+            if (
+              !additionalData ||
+              typeof additionalData !== "object" ||
+              Array.isArray(additionalData)
+            ) {
+              return;
+            }
+
+            const requestedRole = (additionalData as Record<string, unknown>).role;
+
+            if (requestedRole !== undefined) {
+              try {
+                assertRegistrationRole(requestedRole);
+              } catch {
+                throw new APIError("BAD_REQUEST", {
+                  message:
+                    "Invalid account role. Only customer and vendor registrations are allowed.",
+                  code: "INVALID_REGISTRATION_ROLE",
+                });
+              }
+            }
+          }),
+        },
+        {
+          matcher(context) {
             return context.path === "/sign-in/email";
           },
           handler: createAuthMiddleware(async (context) => {
@@ -259,6 +291,11 @@ export function createAuth() {
     plugins: [createRegistrationPolicyPlugin()],
     advanced: {
       cookies: {
+        state: {
+          attributes: {
+            maxAge: 10 * 60,
+          },
+        },
         session_token: {
           attributes: {
             httpOnly: true,
@@ -267,6 +304,9 @@ export function createAuth() {
             path: "/",
           },
         },
+      },
+      ipAddress: {
+        ipAddressHeaders: [BETTER_AUTH_CLIENT_IP_HEADER],
       },
       defaultCookieAttributes: {
         httpOnly: true,
@@ -355,7 +395,19 @@ export function createAuth() {
         create: {
           before: async (user, context) => {
             const body = context?.body as Record<string, unknown> | undefined;
-            return { data: resolveRegistrationUserData(user, body) };
+            const isOAuthCallback = context?.path === "/callback/:id";
+
+            const oauthState = isOAuthCallback
+              ? await getOAuthState<{ role?: unknown }>()
+              : null;
+
+            const registrationData = isOAuthCallback
+              ? { role: oauthState?.role }
+              : body;
+
+            return {
+              data: resolveRegistrationUserData(user, registrationData),
+            };
           },
         },
         update: {

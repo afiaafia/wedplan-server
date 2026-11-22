@@ -43,6 +43,9 @@ environment variables; never decode unverified tokens to obtain a role.
 - `session_token` cookies are `HttpOnly`, `SameSite` configured by
   `BETTER_AUTH_COOKIE_SAME_SITE` (default `lax`), `Secure` in production or when
   the configured base URL is HTTPS, and scoped to `/`.
+- The signed OAuth `state` cookie is scoped to the frontend host by the
+  same-origin Vercel rewrite and is retained for 10 minutes, matching the
+  verification record lifetime. State and CSRF validation remain enabled.
 - Sessions expire after 7 days; cookie caching is disabled so role and blocked
   changes are reflected immediately.
 - CORS is credentialed and restricted to the allowlist in

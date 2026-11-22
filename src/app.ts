@@ -31,6 +31,7 @@ import { createVendorSubscriptionRouter } from "./routes/vendor-subscription.rou
 import { createStripeWebhookHandler } from "./controllers/stripe-webhook.controller.js";
 import type { ProfileImageUploader } from "./controllers/customer.controller.js";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
+import { setBetterAuthClientIp } from "./middleware/better-auth-client-ip.js";
 
 export function createApp(
   auth: Auth,
@@ -73,7 +74,11 @@ export function createApp(
   );
 
   // Better Auth must be mounted before express.json().
-  app.all("/api/auth/*splat", toNodeHandler(auth));
+  const betterAuthHandler = toNodeHandler(auth);
+  app.all("/api/auth/*splat", (req, res) => {
+    setBetterAuthClientIp(req);
+    return betterAuthHandler(req, res);
+  });
 
   app.post(
     "/api/stripe/webhook",

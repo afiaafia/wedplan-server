@@ -17,6 +17,10 @@ import {
 } from "../src/middleware/require-auth.js";
 import { authorizeCustomerSession } from "../src/middleware/require-customer.js";
 import { authorizeVendorSession } from "../src/middleware/require-vendor.js";
+import {
+  BETTER_AUTH_CLIENT_IP_HEADER,
+  setBetterAuthClientIp,
+} from "../src/middleware/better-auth-client-ip.js";
 import { updateProfileSchema } from "../src/validators/profile.validator.js";
 import { normalizeUserRole } from "../src/validators/user.validator.js";
 
@@ -59,6 +63,21 @@ test("password policy requires six characters, upper and lower case", () => {
   assert.match(validatePasswordPolicy("ALLUPPERCASE") ?? "", /lowercase/);
   assert.equal(validatePasswordPolicy(undefined), "Password is required");
   assert.match(validatePasswordPolicy("A".repeat(129)) ?? "", /at most 128/);
+});
+
+test("Better Auth rate limiting uses the Express-resolved client IP, not a supplied hint", () => {
+  const request = {
+    ip: "198.51.100.10",
+    headers: {
+      [BETTER_AUTH_CLIENT_IP_HEADER]: "203.0.113.99",
+      "x-forwarded-for": "203.0.113.99",
+    },
+  } as Request;
+
+  setBetterAuthClientIp(request);
+
+  assert.equal(request.headers[BETTER_AUTH_CLIENT_IP_HEADER], "198.51.100.10");
+  assert.equal(request.headers["x-forwarded-for"], "203.0.113.99");
 });
 
 test("registration defaults to customer and rejects admin or arbitrary roles", () => {
