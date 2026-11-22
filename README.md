@@ -74,7 +74,7 @@ See `.env.example` for the full template. Never commit real values.
 | `CLIENT_URL`, `CORS_ALLOWED_ORIGINS` | Credentialed CORS allowlist; no wildcards |
 | `SERVER_URL` | Canonical backend origin |
 | `MONGODB_URI`, `MONGODB_DB_NAME` | Atlas connection string and database (`wedplan`) |
-| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | Auth signing secret (>= 32 chars) and backend base URL |
+| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | Auth signing secret (>= 32 chars) and public auth origin |
 | `BETTER_AUTH_COOKIE_SAME_SITE` | `lax`, `strict`, or `none`; `none` requires HTTPS/Secure |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Server-only Google OAuth credentials |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` | Server-only Stripe configuration |
@@ -88,7 +88,7 @@ Use a MongoDB Atlas cluster and a database named by `MONGODB_DB_NAME` (`wedplan`
 
 ## Better Auth configuration
 
-`src/lib/auth.ts` configures email/password (minimum 6 characters with upper and lower case), Google OAuth, a 7-day session with cookie cache disabled, HttpOnly/Secure cookies with configurable SameSite, trusted origins from the CORS allowlist, protected user fields, blocked-session checks, and registration role restrictions. Admin cannot be self-assigned. Implicit account linking requires a locally verified email to prevent pre-registration account takeover. For cross-origin Vercel + Render sessions, set the backend `CLIENT_URL`/`CORS_ALLOWED_ORIGINS` to the Vercel origin and configure cookies for cross-site credentialed use in the Render dashboard; exact values are environment-specific and are not stored in this repository.
+`src/lib/auth.ts` configures email/password (minimum 6 characters with upper and lower case), Google OAuth, a 7-day session with cookie cache disabled, HttpOnly/Secure cookies with configurable SameSite, trusted origins from the CORS allowlist, protected user fields, blocked-session checks, and registration role restrictions. Admin cannot be self-assigned. Implicit account linking requires a locally verified email to prevent pre-registration account takeover. In production, the frontend proxies browser `/api/*` requests through Vercel to Render. Set `BETTER_AUTH_URL` to the Vercel frontend origin, `CLIENT_URL` and `CORS_ALLOWED_ORIGINS` to that same allowed frontend origin, and `BETTER_AUTH_COOKIE_SAME_SITE=lax` (Secure remains enabled on HTTPS). Google’s authorized redirect URI must be `https://wedplan-client-ten.vercel.app/api/auth/callback/google`; the Vercel rewrite forwards that callback to this server.
 
 ## ImgBB setup
 

@@ -37,14 +37,18 @@ environment variables; never decode unverified tokens to obtain a role.
 
 - `BETTER_AUTH_SECRET` signs/encrypts Better Auth state and must be at least 32
   characters, supplied only through the environment.
-- `BETTER_AUTH_URL` is the canonical server URL used for callbacks and cookies.
+- `BETTER_AUTH_URL` is the public authentication origin used for OAuth callbacks.
+  In production it is the Vercel frontend origin; Next.js rewrites `/api/*` to
+  this Express server so OAuth state and session cookies remain first-party.
 - `session_token` cookies are `HttpOnly`, `SameSite` configured by
   `BETTER_AUTH_COOKIE_SAME_SITE` (default `lax`), `Secure` in production or when
   the configured base URL is HTTPS, and scoped to `/`.
 - Sessions expire after 7 days; cookie caching is disabled so role and blocked
   changes are reflected immediately.
 - CORS is credentialed and restricted to the allowlist in
-  `src/config/client-origins.ts`; unknown origins receive HTTP 403.
+  `src/config/client-origins.ts`; unknown origins receive HTTP 403. Browser API
+  requests use the same-origin Vercel rewrite, while server-side calls can use
+  the Render origin directly.
 - Logout calls Better Auth `/api/auth/sign-out`, which deletes the active
   session document and clears the cookie. Admin blocking also revokes all
   sessions for that user (`src/services/session-revocation.service.ts`).
