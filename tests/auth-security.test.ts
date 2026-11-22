@@ -112,8 +112,23 @@ test("OAuth callback path reads the requested customer or vendor role from Bette
   assert.equal(resolveRegistrationUserData({}, vendorData).role, "vendor");
   assert.equal(resolveRegistrationUserData({}, customerData).role, "customer");
   assert.deepEqual(
-    getRegistrationUserData("/sign-up/email", { role: "vendor" }, null),
+    getRegistrationUserData(
+      "/sign-up/email",
+      { registrationRole: "vendor", role: "admin" },
+      null
+    ),
     { role: "vendor" }
+  );
+  assert.equal(
+    resolveRegistrationUserData(
+      {},
+      getRegistrationUserData(
+        "/sign-up/email",
+        { registrationRole: "customer" },
+        null
+      )
+    ).role,
+    "customer"
   );
 });
 

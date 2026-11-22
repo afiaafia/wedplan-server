@@ -170,7 +170,21 @@ export function getRegistrationUserData(
   body: Record<string, unknown> | undefined,
   oauthState: { role?: unknown } | null
 ): Record<string, unknown> | undefined {
-  return isOAuthCallbackPath(path) ? { role: oauthState?.role } : body;
+  if (isOAuthCallbackPath(path)) {
+    return { role: oauthState?.role };
+  }
+
+  if (path === "/sign-up/email") {
+    const data: Record<string, unknown> = {
+      role: body?.registrationRole,
+    };
+    if (body?.businessName !== undefined) {
+      data.businessName = body.businessName;
+    }
+    return data;
+  }
+
+  return body;
 }
 
 export function sanitizeUserUpdate(
@@ -213,9 +227,14 @@ function createRegistrationPolicyPlugin(): BetterAuthPlugin {
               });
             }
 
-            if (body.role !== undefined) {
+            const requestedRole =
+              context.path === "/sign-up/email"
+                ? body.registrationRole
+                : body.role;
+
+            if (requestedRole !== undefined) {
               try {
-                assertRegistrationRole(body.role);
+                assertRegistrationRole(requestedRole);
               } catch {
                 throw new APIError("BAD_REQUEST", {
                   message:
