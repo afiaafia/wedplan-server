@@ -18,6 +18,7 @@ import type {
 } from "../validators/profile.validator.js";
 import type { ImageUploadBody } from "../validators/service.validator.js";
 import type { Auth } from "../lib/auth.js";
+import { issueWedPlanJwt } from "../lib/jwt.js";
 
 export type ProfileImageUploader = (
   input: ImageUploadBody
@@ -69,6 +70,26 @@ export function createProfileController(
   });
 
   return {
+    issueToken: asyncHandler(async (_req, res) => {
+      const user = res.locals.user as AuthenticatedUser;
+      const token = await issueWedPlanJwt({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        roles: user.roles,
+        isBlocked: user.isBlocked,
+      });
+      res.status(200).json({
+        success: true,
+        data: {
+          accessToken: token,
+          tokenType: "Bearer",
+          expiresIn: 15 * 60,
+        },
+      });
+    }),
+
     get: asyncHandler(async (_req, res) => {
       const user = res.locals.user as AuthenticatedUser;
       res.status(200).json({

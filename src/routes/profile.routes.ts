@@ -23,6 +23,7 @@ export function createProfileRouter(
   router.use(requireSession(auth));
 
   router.get("/", controller.get);
+  router.post("/token", controller.issueToken);
   router.post("/roles/vendor", controller.onboardVendor);
   router.patch("/", validate(updateProfileSchema, "body"), controller.update);
   router.post(
