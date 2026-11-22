@@ -72,7 +72,7 @@ export async function getVendorEffectivePlan(
     .findOne(
       {
         _id: new ObjectId(vendorId),
-        role: "vendor",
+        roles: "vendor",
         isBlocked: { $ne: true },
       },
       {

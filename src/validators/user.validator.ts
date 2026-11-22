@@ -32,3 +32,24 @@ export function normalizeUserRole(value: unknown): UserRole {
   const result = userRoleSchema.safeParse(value);
   return result.success ? result.data : DEFAULT_USER_ROLE;
 }
+
+export function normalizeUserRoles(
+  value: unknown,
+  legacyRole?: unknown
+): UserRole[] {
+  if (Array.isArray(value)) {
+    return [...new Set(value.filter((item): item is UserRole =>
+      userRoleSchema.safeParse(item).success
+    ))];
+  }
+
+  return [normalizeUserRole(legacyRole)];
+}
+
+export function hasUserRole(
+  roles: unknown,
+  role: UserRole,
+  legacyRole?: unknown
+): boolean {
+  return normalizeUserRoles(roles, legacyRole).includes(role);
+}

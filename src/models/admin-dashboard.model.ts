@@ -2,6 +2,10 @@ import { ObjectId, type Db } from "mongodb";
 import { getDatabase } from "../config/database.js";
 import { COLLECTIONS } from "../config/collections.js";
 import { resolveEffectivePlan } from "../services/subscription-plan.service.js";
+import {
+  normalizeUserRole,
+  normalizeUserRoles,
+} from "../validators/user.validator.js";
 import type {
   AdminDashboardData,
   AdminDashboardStats,
@@ -32,9 +36,9 @@ function connectedDb(db?: Db): Db {
 const defaultDependencies: AdminCountDependencies = {
   countUsers: (db) => connectedDb(db).collection(USER_COLLECTION).countDocuments({}),
   countCustomers: (db) =>
-    connectedDb(db).collection(USER_COLLECTION).countDocuments({ role: "customer" }),
+    connectedDb(db).collection(USER_COLLECTION).countDocuments({ roles: "customer" }),
   countVendors: (db) =>
-    connectedDb(db).collection(USER_COLLECTION).countDocuments({ role: "vendor" }),
+    connectedDb(db).collection(USER_COLLECTION).countDocuments({ roles: "vendor" }),
   countServices: (db) => connectedDb(db).collection(COLLECTIONS.services).countDocuments({}),
   countPendingServices: (db) =>
     connectedDb(db).collection(COLLECTIONS.services).countDocuments({ approvalStatus: "pending" }),
@@ -44,7 +48,7 @@ const defaultDependencies: AdminCountDependencies = {
     connectedDb(db)
       .collection<UserPlanDocument>(USER_COLLECTION)
       .find(
-        { role: "vendor", subscriptionPlan: "premium" },
+        { roles: "vendor", subscriptionPlan: "premium" },
         { projection: { subscriptionPlan: 1, subscriptionExpiresAt: 1 } }
       )
       .toArray(),
@@ -112,6 +116,7 @@ export async function getAdminDashboardData(
             email: 1,
             image: 1,
             role: 1,
+            roles: 1,
             createdAt: 1,
           },
         }
@@ -194,14 +199,16 @@ export async function getAdminDashboardData(
     recentUsers: users.map((user) => {
       const record = user as unknown as Record<string, unknown>;
       const image = asString(record.image);
-      const role = asString(record.role);
+      const role = normalizeUserRole(record.role);
+      const roles = normalizeUserRoles(record.roles, record.role);
       const createdAt = record.createdAt;
       return {
         id: user._id.toString(),
         name: asString(record.name) ?? "Unknown user",
         email: asString(record.email) ?? "",
         ...(image ? { image } : {}),
-        role: role === "vendor" || role === "admin" ? role : "customer",
+        role,
+        roles,
         createdAt:
           createdAt instanceof Date
             ? createdAt.toISOString()

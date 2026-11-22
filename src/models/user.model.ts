@@ -3,7 +3,13 @@ import { getDatabase } from "../config/database.js";
 import { AppError } from "../errors/app-error.js";
 import { resolveEffectivePlan } from "../services/subscription-plan.service.js";
 import type { AdminUsersQuery } from "../validators/dashboard.validator.js";
+import {
+  hasUserRole,
+  normalizeUserRole,
+  normalizeUserRoles,
+} from "../validators/user.validator.js";
 import { buildPaginationMeta, type PaginationMeta } from "../types/dashboard.js";
+import type { UserRole } from "../types/user.js";
 
 const USER_COLLECTION = "user";
 
@@ -14,6 +20,7 @@ export interface AdminUser {
   image?: string;
   businessName?: string;
   role: "customer" | "vendor" | "admin";
+  roles: UserRole[];
   isBlocked: boolean;
   subscriptionPlan: "free" | "premium";
   createdAt: string;
@@ -25,6 +32,7 @@ interface UserDocument {
   image?: unknown;
   businessName?: unknown;
   role?: unknown;
+  roles?: unknown;
   isBlocked?: unknown;
   subscriptionPlan?: unknown;
   subscriptionExpiresAt?: unknown;
@@ -36,7 +44,8 @@ function optionalText(value: unknown): string | undefined {
 }
 
 function toAdminUser(document: UserDocument & { _id: unknown }): AdminUser {
-  const role = document.role;
+  const role = normalizeUserRole(document.role);
+  const roles = normalizeUserRoles(document.roles, document.role);
   const plan = resolveEffectivePlan({
     subscriptionPlan: document.subscriptionPlan,
     subscriptionExpiresAt: document.subscriptionExpiresAt,
@@ -50,7 +59,8 @@ function toAdminUser(document: UserDocument & { _id: unknown }): AdminUser {
     ...(optionalText(document.businessName)
       ? { businessName: optionalText(document.businessName) as string }
       : {}),
-    role: role === "vendor" || role === "admin" ? role : "customer",
+    role,
+    roles,
     isBlocked: document.isBlocked === true,
     subscriptionPlan: plan,
     createdAt: document.createdAt?.toISOString() ?? new Date(0).toISOString(),
@@ -60,7 +70,7 @@ function toAdminUser(document: UserDocument & { _id: unknown }): AdminUser {
 function buildUserFilter(query: AdminUsersQuery) {
   const filter: Record<string, unknown> = {};
 
-  if (query.role) filter.role = query.role;
+  if (query.role) filter.roles = query.role;
   if (query.blocked === "true") filter.isBlocked = true;
   if (query.blocked === "false") filter.isBlocked = { $ne: true };
 
@@ -89,6 +99,7 @@ export async function findAdminUsers(
           image: 1,
           businessName: 1,
           role: 1,
+          roles: 1,
           isBlocked: 1,
           subscriptionPlan: 1,
           subscriptionExpiresAt: 1,
@@ -123,6 +134,7 @@ export async function findAdminUserById(
         image: 1,
         businessName: 1,
         role: 1,
+        roles: 1,
         isBlocked: 1,
         subscriptionPlan: 1,
         subscriptionExpiresAt: 1,
@@ -154,13 +166,16 @@ export async function setUserBlocked(
   const targetObjectId = new ObjectId(targetId);
   const target = await db
     .collection<UserDocument>(USER_COLLECTION)
-    .findOne({ _id: targetObjectId }, { projection: { role: 1, isBlocked: 1 } });
+    .findOne(
+      { _id: targetObjectId },
+      { projection: { role: 1, roles: 1, isBlocked: 1 } }
+    );
 
   if (!target) {
     throw new AppError(404, "USER_NOT_FOUND", "User not found");
   }
 
-  if (target.role === "admin") {
+  if (hasUserRole(target.roles, "admin", target.role)) {
     throw new AppError(
       403,
       "ADMIN_ACCOUNT_PROTECTED",

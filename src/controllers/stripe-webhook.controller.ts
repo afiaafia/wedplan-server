@@ -192,7 +192,7 @@ async function activateVendor(
   const result = await users.updateOne(
     {
       _id: vendorObjectId,
-      role: "vendor",
+      roles: "vendor",
       isBlocked: { $ne: true },
       $or: [
         { stripeSubscriptionId: subscriptionId },
@@ -212,7 +212,7 @@ async function activateVendor(
 
   if (result.matchedCount === 0) {
     const vendor = await users.findOne(
-      { _id: vendorObjectId, role: "vendor" },
+      { _id: vendorObjectId, roles: "vendor" },
       { projection: { _id: 1 } }
     );
 
@@ -232,7 +232,7 @@ async function deactivateVendor(
   await db.collection("user").updateOne(
     {
       _id: getVendorObjectId(vendorId),
-      role: "vendor",
+      roles: "vendor",
       stripeSubscriptionId: subscriptionId,
     },
     {

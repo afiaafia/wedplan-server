@@ -85,7 +85,7 @@ async function resolvePlanFromDatabase(vendorId: string, db?: Db) {
       subscriptionExpiresAt?: unknown;
     }>("user")
     .findOne(
-      { _id: new ObjectId(vendorId), role: "vendor", isBlocked: { $ne: true } },
+      { _id: new ObjectId(vendorId), roles: "vendor", isBlocked: { $ne: true } },
       { projection: { subscriptionPlan: 1, subscriptionExpiresAt: 1 } }
     );
 

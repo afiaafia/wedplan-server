@@ -456,7 +456,7 @@ export async function updateCustomerProfile(
   const result = await db.collection<CustomerProfileRecord>(USER_COLLECTION).updateOne(
     {
       _id: new ObjectId(customerId),
-      role: "customer",
+      roles: "customer",
       isBlocked: { $ne: true },
     },
     { $set: set }

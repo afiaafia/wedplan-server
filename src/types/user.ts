@@ -14,6 +14,7 @@ export type SubscriptionPlanName = (typeof SUBSCRIPTION_PLANS)[number];
 
 export interface UserSubscriptionRecord {
   role?: unknown;
+  roles?: unknown;
   isBlocked?: unknown;
   subscriptionPlan?: unknown;
   subscriptionExpiresAt?: unknown;

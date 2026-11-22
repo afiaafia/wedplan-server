@@ -1,7 +1,9 @@
+import type { Db } from "mongodb";
 import type { RequestHandler } from "express";
 import { AppError } from "../errors/app-error.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { getValidated } from "../middleware/validate.js";
+import { activateVendorAccess } from "../services/role-onboarding.service.js";
 import {
   getSessionHeaders,
   type AuthenticatedUser,
@@ -26,7 +28,8 @@ const defaultUploader: ProfileImageUploader = (input) =>
 
 export function createProfileController(
   auth: Auth,
-  uploadProfileImage: ProfileImageUploader = defaultUploader
+  uploadProfileImage: ProfileImageUploader = defaultUploader,
+  db?: Db
 ) {
   const updateUser: RequestHandler = asyncHandler(async (req, res) => {
     const input = getValidated<UpdateProfileBody>(res);
@@ -36,7 +39,7 @@ export function createProfileController(
     if (input.name !== undefined) body.name = input.name;
     if (input.image !== undefined) body.image = input.image;
     if (input.businessName !== undefined) {
-      if (user.role !== "vendor") {
+      if (!user.roles.includes("vendor")) {
         throw new AppError(
           403,
           "FORBIDDEN",
@@ -75,12 +78,22 @@ export function createProfileController(
           name: user.name,
           email: user.email,
           role: user.role,
+          roles: user.roles,
           isBlocked: user.isBlocked,
         },
       });
     }),
 
     update: updateUser,
+
+    onboardVendor: asyncHandler(async (_req, res) => {
+      const user = res.locals.user as AuthenticatedUser;
+      const roles = await activateVendorAccess(user.id, db);
+      res.status(200).json({
+        success: true,
+        data: { roles },
+      });
+    }),
 
     uploadImage: asyncHandler(async (req, res) => {
       const { image } = getValidated<ProfileImageUploadBody>(res);

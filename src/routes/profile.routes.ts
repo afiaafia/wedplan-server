@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Db } from "mongodb";
 import type { Auth } from "../lib/auth.js";
 import {
   createProfileController,
@@ -13,14 +14,16 @@ import {
 
 export function createProfileRouter(
   auth: Auth,
-  uploadProfileImage?: ProfileImageUploader
+  uploadProfileImage?: ProfileImageUploader,
+  db?: Db
 ) {
   const router = Router();
-  const controller = createProfileController(auth, uploadProfileImage);
+  const controller = createProfileController(auth, uploadProfileImage, db);
 
   router.use(requireSession(auth));
 
   router.get("/", controller.get);
+  router.post("/roles/vendor", controller.onboardVendor);
   router.patch("/", validate(updateProfileSchema, "body"), controller.update);
   router.post(
     "/image",

@@ -52,7 +52,7 @@ export function createCheckoutSessionController(
     const vendorRecord = await users.findOne(
       {
         _id: new ObjectId(vendor.id),
-        role: "vendor",
+        roles: "vendor",
         isBlocked: { $ne: true },
       },
       { projection: { subscriptionPlan: 1, subscriptionExpiresAt: 1 } }

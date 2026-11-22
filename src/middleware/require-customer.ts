@@ -33,7 +33,7 @@ export function authorizeCustomerSession(
     invalidSessionMessage: "Invalid customer session",
   });
 
-  if (user.role !== "customer") {
+  if (!user.roles.includes("customer")) {
     throw new AppError(
       403,
       "CUSTOMER_ACCESS_REQUIRED",

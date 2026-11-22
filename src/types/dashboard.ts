@@ -54,6 +54,7 @@ export interface AdminDashboardData {
     email: string;
     image?: string;
     role: "customer" | "vendor" | "admin";
+    roles: Array<"customer" | "vendor" | "admin">;
     createdAt: string;
   }>;
   recentServices: Array<{

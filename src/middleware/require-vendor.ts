@@ -33,7 +33,7 @@ export function authorizeVendorSession(
     invalidSessionMessage: "Invalid vendor session",
   });
 
-  if (user.role !== "vendor") {
+  if (!user.roles.includes("vendor")) {
     throw new AppError(
       403,
       "VENDOR_ACCESS_REQUIRED",

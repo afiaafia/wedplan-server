@@ -33,7 +33,7 @@ export function authorizeAdminSession(
     invalidSessionMessage: "Invalid admin session",
   });
 
-  if (user.role !== "admin") {
+  if (!user.roles.includes("admin")) {
     throw new AppError(
       403,
       "ADMIN_ACCESS_REQUIRED",

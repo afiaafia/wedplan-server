@@ -22,7 +22,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "Full-day documentary photography for your ceremony and reception, including a pre-wedding consultation, two photographers, and a curated online gallery within two weeks.",
     location: "Lagos",
-    price: 450000,
+    price: 450,
     images: ["https://i.ibb.co/4Z6K6k6R/wedplan-photography.jpg"],
     createdAt: "2026-11-20T09:00:00.000Z",
   },
@@ -32,7 +32,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "Cinematic highlight film and full ceremony coverage with drone footage, professional audio, and a private download link for sharing with family.",
     location: "Lagos",
-    price: 380000,
+    price: 380,
     images: ["https://i.ibb.co/1f9G6gN1/wedplan-videography.jpg"],
     createdAt: "2026-11-19T09:00:00.000Z",
   },
@@ -42,7 +42,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "An elegant open-air garden venue for up to 250 guests with garden arches, bridal suite, on-site parking, and a dedicated event coordinator.",
     location: "Lagos",
-    price: 950000,
+    price: 950,
     images: ["https://i.ibb.co/WWWv51vW/wedplan-venue.jpg"],
     createdAt: "2026-11-18T09:00:00.000Z",
   },
@@ -52,7 +52,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "Customized wedding menu with Nigerian and continental dishes, chafing dishes, service staff, and a tasting session for the couple.",
     location: "Abuja",
-    price: 750000,
+    price: 750,
     images: ["https://i.ibb.co/Z1Kw82b1/wedplan-catering.jpg"],
     createdAt: "2026-11-17T09:00:00.000Z",
   },
@@ -62,7 +62,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "Full reception styling with fresh floral arrangements, table linens, candlelight, and a custom backdrop designed around your colour palette.",
     location: "Port Harcourt",
-    price: 320000,
+    price: 320,
     images: ["https://i.ibb.co/RGSVbZtx/wedplan-decoration.jpg"],
     createdAt: "2026-11-16T09:00:00.000Z",
   },
@@ -72,7 +72,7 @@ const SEED_SERVICES: SeedService[] = [
     description:
       "Bridal and bridesmaid makeup with skin prep, hair styling, trial session, and a touch-up kit for the big day.",
     location: "Ibadan",
-    price: 180000,
+    price: 180,
     images: ["https://i.ibb.co/9k6nXxxQ/wedplan-makeup.jpg"],
     createdAt: "2026-11-15T09:00:00.000Z",
   },
@@ -80,9 +80,15 @@ const SEED_SERVICES: SeedService[] = [
 
 async function loadActiveVendorIds(db: Db): Promise<string[]> {
   const vendors = await db
-    .collection<{ role?: string; isBlocked?: boolean }>("user")
+    .collection<{ role?: string; roles?: string[]; isBlocked?: boolean }>("user")
     .find(
-      { role: "vendor", isBlocked: { $ne: true } },
+      {
+        isBlocked: { $ne: true },
+        $or: [
+          { roles: "vendor" },
+          { roles: { $exists: false }, role: "vendor" },
+        ],
+      },
       { projection: { _id: 1 } }
     )
     .toArray();

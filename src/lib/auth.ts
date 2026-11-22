@@ -18,6 +18,7 @@ const BLOCKED_SIGN_IN_MESSAGE = "Your account has been blocked";
 
 const PROTECTED_USER_FIELDS = [
   "role",
+  "roles",
   "isBlocked",
   "subscriptionPlan",
   "subscriptionExpiresAt",
@@ -144,6 +145,7 @@ export function resolveRegistrationUserData(
   }
 
   data.role = role;
+  data.roles = [role];
   data.isBlocked = false;
   data.subscriptionPlan = "free";
 
@@ -373,6 +375,11 @@ export function createAuth() {
         role: {
           type: ["customer", "vendor", "admin"],
           defaultValue: "customer",
+          input: false,
+        },
+        roles: {
+          type: "string[]",
+          defaultValue: ["customer"],
           input: false,
         },
         isBlocked: {

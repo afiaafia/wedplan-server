@@ -3,7 +3,10 @@ import { fromNodeHeaders } from "better-auth/node";
 import type { Auth } from "../lib/auth.js";
 import { hasValidSessionExpiry } from "../lib/session-expiry.js";
 import { AppError } from "../errors/app-error.js";
-import { normalizeUserRole } from "../validators/user.validator.js";
+import {
+  normalizeUserRole,
+  normalizeUserRoles,
+} from "../validators/user.validator.js";
 import type { UserRole } from "../types/user.js";
 
 export interface AuthenticatedUser {
@@ -11,6 +14,7 @@ export interface AuthenticatedUser {
   email: string;
   name: string;
   role: UserRole;
+  roles: UserRole[];
   isBlocked: boolean;
 }
 
@@ -21,6 +25,7 @@ export interface SessionSnapshot {
     email?: unknown;
     name?: unknown;
     role?: unknown;
+    roles?: unknown;
     isBlocked?: unknown;
   };
 }
@@ -60,9 +65,14 @@ export function authorizeSession(
     );
   }
 
-  const role = normalizeUserRole(session.user.role);
+  const roles = normalizeUserRoles(session.user.roles, session.user.role);
+  const legacyRole = normalizeUserRole(session.user.role);
+  const role = roles.includes(legacyRole) ? legacyRole : roles[0] ?? legacyRole;
 
-  if (options.allowedRoles && !options.allowedRoles.includes(role)) {
+  if (
+    options.allowedRoles &&
+    !options.allowedRoles.some((allowedRole) => roles.includes(allowedRole))
+  ) {
     throw new AppError(
       403,
       options.roleErrorCode ?? "FORBIDDEN",
@@ -85,7 +95,7 @@ export function authorizeSession(
     );
   }
 
-  return { id, email, name, role, isBlocked: false };
+  return { id, email, name, role, roles, isBlocked: false };
 }
 
 export function getSessionHeaders(request: Request): Headers {

@@ -8,6 +8,17 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        FormData: "readonly",
+        fetch: "readonly",
+      },
+    },
+  },
+  {
     rules: {
       "@typescript-eslint/no-namespace": ["error", { allowDeclarations: true }],
     },

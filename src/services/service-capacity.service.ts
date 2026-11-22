@@ -204,7 +204,7 @@ export async function withVendorServiceMutation<T>(
           .findOne(
             {
               _id: objectId,
-              role: "vendor",
+              roles: "vendor",
               isBlocked: { $ne: true },
             },
             {

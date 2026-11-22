@@ -192,6 +192,7 @@ function vendorRecord(overrides: Record<string, unknown> = {}): StoredDocument {
   return {
     _id: new ObjectId(VENDOR_ID),
     role: "vendor",
+    roles: ["vendor"],
     name: "Vendor One",
     email: VENDOR_EMAIL,
     isBlocked: false,

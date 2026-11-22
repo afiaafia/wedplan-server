@@ -84,7 +84,9 @@ test("Better Auth rate limiting uses the Express-resolved client IP, not a suppl
 
 test("registration defaults to customer and rejects admin or arbitrary roles", () => {
   assert.equal(resolveRegistrationUserData({}, undefined).role, "customer");
+  assert.deepEqual(resolveRegistrationUserData({}, undefined).roles, ["customer"]);
   assert.equal(resolveRegistrationUserData({}, { role: "vendor" }).role, "vendor");
+  assert.deepEqual(resolveRegistrationUserData({}, { role: "vendor" }).roles, ["vendor"]);
   assert.equal(resolveRegistrationUserData({}, { role: "admin" }).role, "customer");
   assert.equal(resolveRegistrationUserData({}, { role: "root" }).role, "customer");
   assert.equal(
@@ -110,7 +112,9 @@ test("OAuth callback path reads the requested customer or vendor role from Bette
   );
 
   assert.equal(resolveRegistrationUserData({}, vendorData).role, "vendor");
+  assert.deepEqual(resolveRegistrationUserData({}, vendorData).roles, ["vendor"]);
   assert.equal(resolveRegistrationUserData({}, customerData).role, "customer");
+  assert.deepEqual(resolveRegistrationUserData({}, customerData).roles, ["customer"]);
   assert.deepEqual(
     getRegistrationUserData(
       "/sign-up/email",
@@ -141,9 +145,19 @@ test("Google sign-in does not change roles on existing customer or vendor accoun
     role: "vendor",
     ...sanitizeUserUpdate({ name: "Updated from Google", role: "customer" }),
   };
+  const updatedDualRoleUser = {
+    role: "customer",
+    roles: ["customer", "vendor"],
+    ...sanitizeUserUpdate({
+      name: "Updated from Google",
+      role: "admin",
+      roles: ["admin"],
+    }),
+  };
 
   assert.equal(updatedCustomer.role, "customer");
   assert.equal(updatedVendor.role, "vendor");
+  assert.deepEqual(updatedDualRoleUser.roles, ["customer", "vendor"]);
 });
 
 test("OAuth registration cannot create admins, blocked users, or premium users", () => {
@@ -161,6 +175,7 @@ test("OAuth registration cannot create admins, blocked users, or premium users",
   );
 
   assert.equal(created.role, "customer");
+  assert.deepEqual(created.roles, ["customer"]);
   assert.equal(created.isBlocked, false);
   assert.equal(created.subscriptionPlan, "free");
   assert.equal(created.subscriptionExpiresAt, undefined);
@@ -193,6 +208,7 @@ test("protected user fields cannot be changed through profile updates", () => {
   assert.equal(hasProtectedUserUpdate({ name: "New Name", image: null }), false);
   for (const field of [
     "role",
+    "roles",
     "isBlocked",
     "subscriptionPlan",
     "subscriptionExpiresAt",
@@ -207,6 +223,7 @@ test("protected user fields cannot be changed through profile updates", () => {
       image: "https://example.com/a.png",
       businessName: "Grace Events",
       role: "admin",
+      roles: ["admin"],
     }),
     {
       name: "New Name",
@@ -250,6 +267,10 @@ test("role checks are enforced independently for customers, vendors, and admins"
   const customerSession = withUser({ role: "customer" });
   const vendorSession = withUser({ role: "vendor" });
   const adminSession = withUser({ role: "admin" });
+  const noCapabilitiesSession = withUser({
+    role: "customer",
+    roles: [],
+  });
 
   assert.equal(authorizeCustomerSession(customerSession).id, baseSession.user.id);
   assert.equal(authorizeVendorSession(vendorSession).id, baseSession.user.id);
@@ -259,8 +280,26 @@ test("role checks are enforced independently for customers, vendors, and admins"
   assertRejected(() => authorizeVendorSession(customerSession), "VENDOR_ACCESS_REQUIRED");
   assertRejected(() => authorizeAdminSession(customerSession), "ADMIN_ACCESS_REQUIRED");
   assertRejected(
+    () => authorizeCustomerSession(noCapabilitiesSession),
+    "CUSTOMER_ACCESS_REQUIRED"
+  );
+  assertRejected(
     () => authorizeAdminSession(withUser({ role: "admin", isBlocked: true })),
     "ACCOUNT_BLOCKED"
+  );
+});
+
+test("one customer identity with both capabilities is authorized for both dashboards", () => {
+  const dualRoleSession = withUser({
+    role: "customer",
+    roles: ["customer", "vendor"],
+  });
+
+  assert.equal(authorizeCustomerSession(dualRoleSession).id, baseSession.user.id);
+  assert.equal(authorizeVendorSession(dualRoleSession).id, baseSession.user.id);
+  assertRejected(
+    () => authorizeAdminSession(dualRoleSession),
+    "ADMIN_ACCESS_REQUIRED"
   );
 });
 

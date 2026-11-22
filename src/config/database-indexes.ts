@@ -3,6 +3,30 @@ import { COLLECTIONS } from "./collections.js";
 
 export async function createDatabaseIndexes(): Promise<void> {
   const db = getDatabase();
+  const users = db.collection("user");
+  const roleMigration = await users.updateMany(
+    {
+      $or: [{ roles: { $exists: false } }, { roles: null }],
+    },
+    [
+      {
+        $set: {
+          roles: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$role", "admin"] }, then: ["admin"] },
+                { case: { $eq: ["$role", "vendor"] }, then: ["vendor"] },
+              ],
+              default: ["customer"],
+            },
+          },
+        },
+      },
+    ]
+  );
+  if (roleMigration.modifiedCount > 0) {
+    console.log(`Migrated roles for ${roleMigration.modifiedCount} existing users`);
+  }
 
   // Service indexes
   await db.collection(COLLECTIONS.services).createIndexes([
@@ -94,7 +118,7 @@ export async function createDatabaseIndexes(): Promise<void> {
     },
   ]);
 
-  await db.collection("user").createIndexes([
+  await users.createIndexes([
     {
       key: { role: 1, createdAt: -1 },
       name: "user_role_created",
@@ -106,6 +130,18 @@ export async function createDatabaseIndexes(): Promise<void> {
     {
       key: { isBlocked: 1, role: 1 },
       name: "user_blocked_role",
+    },
+    {
+      key: { roles: 1, createdAt: -1 },
+      name: "user_roles_created",
+    },
+    {
+      key: { roles: 1, subscriptionPlan: 1, subscriptionExpiresAt: 1 },
+      name: "user_roles_subscription",
+    },
+    {
+      key: { isBlocked: 1, roles: 1 },
+      name: "user_blocked_roles",
     },
   ]);
 

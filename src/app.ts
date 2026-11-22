@@ -111,7 +111,7 @@ export function createApp(
   });
 
   app.use("/api/services", createServicesRouter(options.db));
-  app.use("/api/me", createProfileRouter(auth));
+  app.use("/api/me", createProfileRouter(auth, undefined, options.db));
   app.use("/api/bookings", createBookingsRouter(auth, options.db));
   app.use(
     "/api/customer",

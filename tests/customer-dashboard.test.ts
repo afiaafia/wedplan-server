@@ -24,6 +24,8 @@ type StoredService = ServiceDocument & { _id: ObjectId };
 type StoredUser = Record<string, unknown> & { _id: ObjectId };
 
 function userDocument(id: string, overrides: Record<string, unknown> = {}): StoredUser {
+  const role =
+    typeof overrides.role === "string" ? overrides.role : "customer";
   return {
     _id: new ObjectId(id),
     name: "Test Customer",
@@ -39,6 +41,7 @@ function userDocument(id: string, overrides: Record<string, unknown> = {}): Stor
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
+    roles: overrides.roles ?? [role],
   };
 }
 
@@ -84,6 +87,9 @@ function bookingDocument(
 }
 
 function sameValue(actual: unknown, expected: unknown): boolean {
+  if (Array.isArray(actual)) {
+    return actual.some((value) => sameValue(value, expected));
+  }
   if (expected instanceof ObjectId) {
     return actual instanceof ObjectId && actual.equals(expected);
   }
@@ -505,7 +511,7 @@ test("non-customers, blocked customers, and unauthenticated users cannot access 
   assert.equal(errorCode(anonymous.body), "UNAUTHORIZED");
 
   const staleDb = createFakeDb({
-    users: [userDocument(CUSTOMER_ID, { role: "vendor" })],
+    users: [userDocument(CUSTOMER_ID, { role: "vendor", roles: ["vendor"] })],
   });
   const staleUrl = await startServer(t, mockAuth(), staleDb.db);
   const stale = await request(staleUrl, "GET", "/api/customer/dashboard");
