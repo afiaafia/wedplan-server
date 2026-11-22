@@ -17,7 +17,9 @@ export interface AdminTransaction {
   currency: string;
   status: string;
   stripeSessionId?: string;
+  stripeSubscriptionId?: string;
   createdAt: string;
+  provider: "Stripe";
 }
 
 interface AdminTransactionDocument extends TransactionDocument {
@@ -42,6 +44,7 @@ function toAdminTransaction(
     currency: document.currency,
     status: document.status,
     createdAt: document.createdAt.toISOString(),
+    provider: "Stripe",
   };
 
   const vendor = vendors.get(document.vendorId);
@@ -52,6 +55,9 @@ function toAdminTransaction(
 
   if (includeReference && typeof document.stripeSessionId === "string") {
     transaction.stripeSessionId = document.stripeSessionId;
+  }
+  if (typeof document.stripeSubscriptionId === "string") {
+    transaction.stripeSubscriptionId = document.stripeSubscriptionId;
   }
 
   return transaction;
@@ -103,6 +109,7 @@ export async function findAdminTransactions(
           currency: 1,
           status: 1,
           stripeSessionId: 1,
+          stripeSubscriptionId: 1,
           createdAt: 1,
         },
       })

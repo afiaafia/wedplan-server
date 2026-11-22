@@ -39,10 +39,22 @@ export interface AdminDashboardStats {
   totalUsers: number;
   totalCustomers: number;
   totalVendors: number;
+  totalBlockedUsers: number;
   totalServices: number;
   pendingServiceApprovals: number;
+  approvedServices: number;
+  rejectedServices: number;
   totalBookings: number;
+  pendingBookings: number;
+  acceptedBookings: number;
+  rejectedBookings: number;
+  cancelledBookings: number;
   totalTransactions: number;
+  successfulTransactions: number;
+  successfulTransactionAmounts: Array<{
+    currency: string;
+    amount: number;
+  }>;
   premiumVendors: number;
 }
 

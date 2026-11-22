@@ -2,6 +2,9 @@ import { ObjectId, type Db } from "mongodb";
 import { getDatabase } from "../config/database.js";
 import { COLLECTIONS } from "../config/collections.js";
 import { resolveEffectivePlan } from "../services/subscription-plan.service.js";
+import type { BookingStatus } from "../types/booking.js";
+import type { ServiceApprovalStatus } from "../types/service.js";
+import type { TransactionStatus } from "../types/transaction.js";
 import {
   normalizeUserRole,
   normalizeUserRoles,
@@ -22,15 +25,61 @@ export interface AdminCountDependencies {
   countUsers: (db?: Db) => Promise<number>;
   countCustomers: (db?: Db) => Promise<number>;
   countVendors: (db?: Db) => Promise<number>;
+  countBlockedUsers: (db?: Db) => Promise<number>;
   countServices: (db?: Db) => Promise<number>;
-  countPendingServices: (db?: Db) => Promise<number>;
+  countServicesByApprovalStatus: (
+    status: ServiceApprovalStatus,
+    db?: Db
+  ) => Promise<number>;
   countBookings: (db?: Db) => Promise<number>;
+  countBookingsByStatus: (status: BookingStatus, db?: Db) => Promise<number>;
   countTransactions: (db?: Db) => Promise<number>;
+  countTransactionsByStatus: (
+    status: TransactionStatus,
+    db?: Db
+  ) => Promise<number>;
+  sumSuccessfulTransactionAmounts: (
+    db?: Db
+  ) => Promise<Array<{ currency: string; amount: number }>>;
   listPremiumVendorIds: (db?: Db) => Promise<UserPlanDocument[]>;
 }
 
 function connectedDb(db?: Db): Db {
   return db ?? getDatabase();
+}
+
+export async function sumSuccessfulTransactionAmounts(
+  db?: Db
+): Promise<Array<{ currency: string; amount: number }>> {
+  const records = await connectedDb(db)
+    .collection(COLLECTIONS.transactions)
+    .aggregate<{ _id: unknown; totalAmount: unknown }>([
+      { $match: { status: "completed" } },
+      {
+        $group: {
+          _id: { $toLower: "$currency" },
+          totalAmount: { $sum: "$amount" },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ])
+    .toArray();
+
+  return records.map((record) => {
+    if (
+      typeof record._id !== "string" ||
+      !record._id.trim() ||
+      typeof record.totalAmount !== "number" ||
+      !Number.isFinite(record.totalAmount)
+    ) {
+      throw new Error("Completed transaction totals contain invalid data");
+    }
+
+    return {
+      currency: record._id.toLowerCase(),
+      amount: record.totalAmount,
+    };
+  });
 }
 
 const defaultDependencies: AdminCountDependencies = {
@@ -39,11 +88,20 @@ const defaultDependencies: AdminCountDependencies = {
     connectedDb(db).collection(USER_COLLECTION).countDocuments({ roles: "customer" }),
   countVendors: (db) =>
     connectedDb(db).collection(USER_COLLECTION).countDocuments({ roles: "vendor" }),
+  countBlockedUsers: (db) =>
+    connectedDb(db).collection(USER_COLLECTION).countDocuments({ isBlocked: true }),
   countServices: (db) => connectedDb(db).collection(COLLECTIONS.services).countDocuments({}),
-  countPendingServices: (db) =>
-    connectedDb(db).collection(COLLECTIONS.services).countDocuments({ approvalStatus: "pending" }),
+  countServicesByApprovalStatus: (status, db) =>
+    connectedDb(db)
+      .collection(COLLECTIONS.services)
+      .countDocuments({ approvalStatus: status }),
   countBookings: (db) => connectedDb(db).collection(COLLECTIONS.bookings).countDocuments({}),
+  countBookingsByStatus: (status, db) =>
+    connectedDb(db).collection(COLLECTIONS.bookings).countDocuments({ status }),
   countTransactions: (db) => connectedDb(db).collection(COLLECTIONS.transactions).countDocuments({}),
+  countTransactionsByStatus: (status, db) =>
+    connectedDb(db).collection(COLLECTIONS.transactions).countDocuments({ status }),
+  sumSuccessfulTransactionAmounts,
   listPremiumVendorIds: (db) =>
     connectedDb(db)
       .collection<UserPlanDocument>(USER_COLLECTION)
@@ -62,19 +120,37 @@ export async function getAdminDashboardStats(
     totalUsers,
     totalCustomers,
     totalVendors,
+    totalBlockedUsers,
     totalServices,
     pendingServiceApprovals,
+    approvedServices,
+    rejectedServices,
     totalBookings,
+    pendingBookings,
+    acceptedBookings,
+    rejectedBookings,
+    cancelledBookings,
     totalTransactions,
+    successfulTransactions,
+    successfulTransactionAmounts,
     premiumVendors,
   ] = await Promise.all([
     dependencies.countUsers(db),
     dependencies.countCustomers(db),
     dependencies.countVendors(db),
+    dependencies.countBlockedUsers(db),
     dependencies.countServices(db),
-    dependencies.countPendingServices(db),
+    dependencies.countServicesByApprovalStatus("pending", db),
+    dependencies.countServicesByApprovalStatus("approved", db),
+    dependencies.countServicesByApprovalStatus("rejected", db),
     dependencies.countBookings(db),
+    dependencies.countBookingsByStatus("Pending", db),
+    dependencies.countBookingsByStatus("Accepted", db),
+    dependencies.countBookingsByStatus("Rejected", db),
+    dependencies.countBookingsByStatus("Cancelled", db),
     dependencies.countTransactions(db),
+    dependencies.countTransactionsByStatus("completed", db),
+    dependencies.sumSuccessfulTransactionAmounts(db),
     dependencies
       .listPremiumVendorIds(db)
       .then((records) =>
@@ -86,10 +162,19 @@ export async function getAdminDashboardStats(
     totalUsers,
     totalCustomers,
     totalVendors,
+    totalBlockedUsers,
     totalServices,
     pendingServiceApprovals,
+    approvedServices,
+    rejectedServices,
     totalBookings,
+    pendingBookings,
+    acceptedBookings,
+    rejectedBookings,
+    cancelledBookings,
     totalTransactions,
+    successfulTransactions,
+    successfulTransactionAmounts,
     premiumVendors,
   };
 }

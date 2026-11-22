@@ -677,7 +677,9 @@ test("expired Checkout marks its transaction cancelled without activating Premiu
 test("admin can read real transactions but cannot modify their status", async () => {
   const db = createFakeDb({
     user: [vendorRecord()],
-    transactions: [pendingTransaction()],
+    transactions: [
+      pendingTransaction({ stripeSubscriptionId: SUBSCRIPTION_ID }),
+    ],
   });
   const stripe = createFakeStripe();
   const { server, request } = await startServer({
@@ -696,6 +698,8 @@ test("admin can read real transactions but cannot modify their status", async ()
     assert.equal(body.data[0].vendorName, "Vendor One");
     assert.equal(body.data[0].vendorEmail, VENDOR_EMAIL);
     assert.equal(body.data[0].stripeSessionId, SESSION_ID);
+    assert.equal(body.data[0].stripeSubscriptionId, SUBSCRIPTION_ID);
+    assert.equal(body.data[0].provider, "Stripe");
 
     const mutation = await request(`/api/admin/transactions/${db.tables.transactions?.[0]._id}/status`, {
       method: "PATCH",

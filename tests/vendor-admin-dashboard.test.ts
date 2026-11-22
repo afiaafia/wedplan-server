@@ -4,7 +4,10 @@ import type { AddressInfo } from "node:net";
 import { ObjectId, type Db } from "mongodb";
 import { AppError } from "../src/errors/app-error.js";
 import type { Auth } from "../src/lib/auth.js";
-import { getAdminDashboardStats } from "../src/models/admin-dashboard.model.js";
+import {
+  getAdminDashboardStats,
+  sumSuccessfulTransactionAmounts,
+} from "../src/models/admin-dashboard.model.js";
 import {
   findVendorBookings,
   updateVendorBookingStatus,
@@ -15,6 +18,7 @@ import {
   updateVendorServiceWithApproval,
 } from "../src/models/service.model.js";
 import { setUserBlocked } from "../src/models/user.model.js";
+import { provisionInitialAdmin } from "../src/services/admin-provisioning.service.js";
 
 type StoredDocument = Record<string, unknown> & { _id: ObjectId };
 
@@ -223,10 +227,19 @@ test("admin dashboard premium count uses effective, not stored, plans", async ()
     countUsers: async () => 20,
     countCustomers: async () => 12,
     countVendors: async () => 8,
+    countBlockedUsers: async () => 3,
     countServices: async () => 40,
-    countPendingServices: async () => 5,
+    countServicesByApprovalStatus: async (status) =>
+      ({ pending: 5, approved: 30, rejected: 5 })[status],
     countBookings: async () => 70,
+    countBookingsByStatus: async (status) =>
+      ({ Pending: 10, Accepted: 20, Rejected: 30, Cancelled: 10 })[status],
     countTransactions: async () => 9,
+    countTransactionsByStatus: async (status) => (status === "completed" ? 6 : 0),
+    sumSuccessfulTransactionAmounts: async () => [
+      { currency: "usd", amount: 125.5 },
+      { currency: "ngn", amount: 5000 },
+    ],
     listPremiumVendorIds: async () => [
       { subscriptionPlan: "premium", subscriptionExpiresAt: new Date("2999-01-01") },
       { subscriptionPlan: "premium", subscriptionExpiresAt: new Date("2020-01-01") },
@@ -238,12 +251,162 @@ test("admin dashboard premium count uses effective, not stored, plans", async ()
     totalUsers: 20,
     totalCustomers: 12,
     totalVendors: 8,
+    totalBlockedUsers: 3,
     totalServices: 40,
     pendingServiceApprovals: 5,
+    approvedServices: 30,
+    rejectedServices: 5,
     totalBookings: 70,
+    pendingBookings: 10,
+    acceptedBookings: 20,
+    rejectedBookings: 30,
+    cancelledBookings: 10,
     totalTransactions: 9,
+    successfulTransactions: 6,
+    successfulTransactionAmounts: [
+      { currency: "usd", amount: 125.5 },
+      { currency: "ngn", amount: 5000 },
+    ],
     premiumVendors: 1,
   });
+});
+
+test("successful transaction amounts are grouped by their stored currency", async () => {
+  let pipeline: unknown;
+  const db = {
+    collection(name: string) {
+      assert.equal(name, "transactions");
+      return {
+        aggregate(value: unknown) {
+          pipeline = value;
+          return {
+            async toArray() {
+              return [
+                { _id: "USD", totalAmount: 125.5 },
+                { _id: "ngn", totalAmount: 5000 },
+              ];
+            },
+          };
+        },
+      };
+    },
+  } as unknown as Db;
+
+  const totals = await sumSuccessfulTransactionAmounts(db);
+
+  assert.deepEqual(pipeline, [
+    { $match: { status: "completed" } },
+    {
+      $group: {
+        _id: { $toLower: "$currency" },
+        totalAmount: { $sum: "$amount" },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+  assert.deepEqual(totals, [
+    { currency: "usd", amount: 125.5 },
+    { currency: "ngn", amount: 5000 },
+  ]);
+});
+
+test("first Admin provisioning requires an existing unblocked account and preserves roles", async () => {
+  const user = {
+    _id: new ObjectId("507f1f77bcf86cd799439012"),
+    email: "vendor@example.com",
+    role: "vendor",
+    roles: ["customer", "vendor"],
+    isBlocked: false,
+    emailVerified: true,
+  };
+  const db = {
+    collection(name: string) {
+      assert.equal(name, "user");
+      return {
+        async findOne(filter: Record<string, unknown>) {
+          if ("$or" in filter) {
+            return user.role === "admin" || user.roles.includes("admin")
+              ? user
+              : null;
+          }
+          const email = filter.email;
+          return email instanceof RegExp && email.test(user.email) ? user : null;
+        },
+        async updateOne(
+          filter: Record<string, unknown>,
+          update: { $set: Record<string, unknown> }
+        ) {
+          if (
+            filter._id !== user._id ||
+            user.role === "admin" ||
+            user.roles.includes("admin") ||
+            user.isBlocked
+          ) {
+            return { matchedCount: 0 };
+          }
+          Object.assign(user, update.$set);
+          return { matchedCount: 1 };
+        },
+      };
+    },
+  } as unknown as Db;
+
+  const result = await provisionInitialAdmin(" VENDOR@example.com ", db);
+
+  assert.deepEqual(result, {
+    id: user._id.toString(),
+    email: "vendor@example.com",
+  });
+  assert.equal(user.role, "admin");
+  assert.deepEqual(user.roles, ["customer", "vendor", "admin"]);
+  await assert.rejects(
+    () => provisionInitialAdmin("vendor@example.com", db),
+    (error: unknown) =>
+      error instanceof AppError && error.code === "ADMIN_ALREADY_PROVISIONED"
+  );
+});
+
+test("first Admin provisioning refuses missing, blocked, and unverified accounts", async () => {
+  const user = {
+    _id: new ObjectId("507f1f77bcf86cd799439012"),
+    email: "vendor@example.com",
+    role: "vendor",
+    roles: ["vendor"],
+    isBlocked: true,
+    emailVerified: true,
+  };
+  const db = {
+    collection() {
+      return {
+        async findOne(filter: Record<string, unknown>) {
+          if ("$or" in filter) return null;
+          const email = filter.email;
+          return email instanceof RegExp && email.test(user.email) ? user : null;
+        },
+        async updateOne() {
+          return { matchedCount: 0 };
+        },
+      };
+    },
+  } as unknown as Db;
+
+  await assert.rejects(
+    () => provisionInitialAdmin("missing@example.com", db),
+    (error: unknown) =>
+      error instanceof AppError && error.code === "ADMIN_ACCOUNT_NOT_FOUND"
+  );
+  await assert.rejects(
+    () => provisionInitialAdmin("vendor@example.com", db),
+    (error: unknown) =>
+      error instanceof AppError && error.code === "ADMIN_ACCOUNT_BLOCKED"
+  );
+  user.isBlocked = false;
+  user.emailVerified = false;
+  await assert.rejects(
+    () => provisionInitialAdmin("vendor@example.com", db),
+    (error: unknown) =>
+      error instanceof AppError && error.code === "ADMIN_EMAIL_UNVERIFIED"
+  );
 });
 
 test("admin user management protects admins and self while allowing vendor blocks", async () => {
