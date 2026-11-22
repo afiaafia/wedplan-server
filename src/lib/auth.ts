@@ -161,6 +161,18 @@ export function resolveRegistrationUserData(
   return data;
 }
 
+export function isOAuthCallbackPath(path: string | undefined): boolean {
+  return typeof path === "string" && /^\/callback\/[^/]+\/?$/.test(path);
+}
+
+export function getRegistrationUserData(
+  path: string | undefined,
+  body: Record<string, unknown> | undefined,
+  oauthState: { role?: unknown } | null
+): Record<string, unknown> | undefined {
+  return isOAuthCallbackPath(path) ? { role: oauthState?.role } : body;
+}
+
 export function sanitizeUserUpdate(
   user: Record<string, unknown>
 ): Record<string, unknown> {
@@ -395,15 +407,17 @@ export function createAuth() {
         create: {
           before: async (user, context) => {
             const body = context?.body as Record<string, unknown> | undefined;
-            const isOAuthCallback = context?.path === "/callback/:id";
+            const isOAuthCallback = isOAuthCallbackPath(context?.path);
 
             const oauthState = isOAuthCallback
               ? await getOAuthState<{ role?: unknown }>()
               : null;
 
-            const registrationData = isOAuthCallback
-              ? { role: oauthState?.role }
-              : body;
+            const registrationData = getRegistrationUserData(
+              context?.path,
+              body,
+              oauthState
+            );
 
             return {
               data: resolveRegistrationUserData(user, registrationData),

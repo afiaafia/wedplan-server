@@ -4,7 +4,9 @@ import type { NextFunction, Request, Response } from "express";
 import { AppError } from "../src/errors/app-error.js";
 import type { Auth } from "../src/lib/auth.js";
 import {
+  getRegistrationUserData,
   hasProtectedUserUpdate,
+  isOAuthCallbackPath,
   resolveRegistrationUserData,
   sanitizeUserUpdate,
   validatePasswordPolicy,
@@ -89,6 +91,44 @@ test("registration defaults to customer and rejects admin or arbitrary roles", (
     resolveRegistrationUserData({}, { role: { nested: "admin" } }).role,
     "customer"
   );
+});
+
+test("OAuth callback path reads the requested customer or vendor role from Better Auth state", () => {
+  assert.equal(isOAuthCallbackPath("/callback/google"), true);
+  assert.equal(isOAuthCallbackPath("/callback"), false);
+  assert.equal(isOAuthCallbackPath("/callback/google/extra"), false);
+
+  const vendorData = getRegistrationUserData(
+    "/callback/google",
+    undefined,
+    { role: "vendor" }
+  );
+  const customerData = getRegistrationUserData(
+    "/callback/google",
+    undefined,
+    { role: "customer" }
+  );
+
+  assert.equal(resolveRegistrationUserData({}, vendorData).role, "vendor");
+  assert.equal(resolveRegistrationUserData({}, customerData).role, "customer");
+  assert.deepEqual(
+    getRegistrationUserData("/sign-up/email", { role: "vendor" }, null),
+    { role: "vendor" }
+  );
+});
+
+test("Google sign-in does not change roles on existing customer or vendor accounts", () => {
+  const updatedCustomer = {
+    role: "customer",
+    ...sanitizeUserUpdate({ name: "Updated from Google", role: "vendor" }),
+  };
+  const updatedVendor = {
+    role: "vendor",
+    ...sanitizeUserUpdate({ name: "Updated from Google", role: "customer" }),
+  };
+
+  assert.equal(updatedCustomer.role, "customer");
+  assert.equal(updatedVendor.role, "vendor");
 });
 
 test("OAuth registration cannot create admins, blocked users, or premium users", () => {
