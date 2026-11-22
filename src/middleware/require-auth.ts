@@ -1,4 +1,4 @@
-import type { Request, RequestHandler, Response } from "express";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { fromNodeHeaders } from "better-auth/node";
 import type { Auth } from "../lib/auth.js";
 import { hasValidSessionExpiry } from "../lib/session-expiry.js";
@@ -8,6 +8,7 @@ import {
   normalizeUserRoles,
 } from "../validators/user.validator.js";
 import type { UserRole } from "../types/user.js";
+import { revalidateJwtUser, verifyWedPlanJwt } from "../lib/jwt.js";
 
 export interface AuthenticatedUser {
   id: string;
@@ -104,6 +105,46 @@ export function getSessionHeaders(request: Request): Headers {
 
 export function requireSession(auth: Auth): RequestHandler {
   return (req, res, next) => {
+    authenticateRequest(auth, req, res, next);
+  };
+}
+
+export function authenticateRequest(
+  auth: Auth,
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+    const authorization = req.headers.authorization;
+    if (typeof authorization === "string") {
+      if (!authorization.startsWith("Bearer ")) {
+        next(new AppError(401, "UNAUTHORIZED", "Invalid authorization scheme"));
+        return;
+      }
+      const token = authorization.slice("Bearer ".length).trim();
+      if (!token) {
+        next(new AppError(401, "UNAUTHORIZED", "Invalid bearer token"));
+        return;
+      }
+      void verifyWedPlanJwt(token)
+        .then(revalidateJwtUser)
+        .then((user) => {
+          if (user.isBlocked) {
+            throw new AppError(
+              403,
+              "ACCOUNT_BLOCKED",
+              "Your account has been blocked"
+            );
+          }
+          res.locals.user = user;
+          next();
+        })
+        .catch(() => {
+          next(new AppError(401, "UNAUTHORIZED", "Invalid or expired bearer token"));
+        });
+      return;
+    }
+
     void auth.api
       .getSession({ headers: getSessionHeaders(req) })
       .then((session) => {
@@ -111,7 +152,6 @@ export function requireSession(auth: Auth): RequestHandler {
         next();
       })
       .catch(next);
-  };
 }
 
 export function withAuthorizedSession(

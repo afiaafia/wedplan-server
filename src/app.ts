@@ -110,7 +110,7 @@ export function createApp(
     });
   });
 
-  app.use("/api/services", createServicesRouter(options.db));
+  app.use("/api/services", createServicesRouter(auth, options.db));
   app.use("/api/me", createProfileRouter(auth, undefined, options.db));
   app.use("/api/bookings", createBookingsRouter(auth, options.db));
   app.use(

@@ -25,6 +25,13 @@ import {
 } from "../src/middleware/better-auth-client-ip.js";
 import { updateProfileSchema } from "../src/validators/profile.validator.js";
 import { normalizeUserRole } from "../src/validators/user.validator.js";
+import {
+  issueWedPlanJwt,
+  verifyWedPlanJwt,
+  WEDPLAN_JWT_AUDIENCE,
+  WEDPLAN_JWT_TTL_SECONDS,
+} from "../src/lib/jwt.js";
+import { SignJWT } from "jose";
 
 const baseSession: SessionSnapshot = {
   session: { expiresAt: "2999-01-01T00:00:00.000Z" },
@@ -246,6 +253,59 @@ test("profile validator rejects ownership, role, and subscription fields", () =>
     updateProfileSchema.safeParse({ name: "New Name", businessName: "Grace Events" })
       .success,
     true
+  );
+});
+
+test("JWT valid, invalid, expired, and insufficient-role cases are enforced", async () => {
+  process.env.BETTER_AUTH_SECRET =
+    "wedplan-test-secret-that-is-at-least-32-characters";
+  process.env.BETTER_AUTH_URL = "https://wedplan.example";
+
+  const token = await issueWedPlanJwt({
+    id: "507f1f77bcf86cd799439011",
+    email: "vendor@example.com",
+    name: "Vendor",
+    role: "vendor",
+    roles: ["vendor"],
+    isBlocked: false,
+  });
+  const claims = await verifyWedPlanJwt(token);
+  assert.equal(claims.sub, "507f1f77bcf86cd799439011");
+  assert.equal(claims.aud, WEDPLAN_JWT_AUDIENCE);
+  assert.ok(claims.exp - claims.iat <= WEDPLAN_JWT_TTL_SECONDS);
+
+  await assert.rejects(() => verifyWedPlanJwt("not-a-jwt"));
+
+  const expiredToken = await new SignJWT({
+    email: "vendor@example.com",
+    name: "Vendor",
+    role: "vendor",
+    roles: ["vendor"],
+    isBlocked: false,
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setSubject("507f1f77bcf86cd799439011")
+    .setIssuer("https://wedplan.example")
+    .setAudience(WEDPLAN_JWT_AUDIENCE)
+    .setIssuedAt(Math.floor(Date.now() / 1000) - 120)
+    .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+    .sign(new TextEncoder().encode(process.env.BETTER_AUTH_SECRET));
+  await assert.rejects(() => verifyWedPlanJwt(expiredToken));
+
+  assertRejected(
+    () =>
+      authorizeVendorSession({
+        session: { expiresAt: "2999-01-01T00:00:00.000Z" },
+        user: {
+          id: "507f1f77bcf86cd799439011",
+          email: "customer@example.com",
+          name: "Customer",
+          role: "customer",
+          roles: ["customer"],
+          isBlocked: false,
+        },
+      }),
+    "VENDOR_ACCESS_REQUIRED"
   );
 });
 
