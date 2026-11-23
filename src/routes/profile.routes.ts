@@ -9,8 +9,10 @@ import { requireSession } from "../middleware/require-auth.js";
 import { validate } from "../middleware/validate.js";
 import {
   profileImageUploadSchema,
+  setPasswordSchema,
   updateProfileSchema,
 } from "../validators/profile.validator.js";
+import { requireBetterAuthAdmin } from "../middleware/require-admin.js";
 
 export function createProfileRouter(
   auth: Auth,
@@ -19,6 +21,13 @@ export function createProfileRouter(
 ) {
   const router = Router();
   const controller = createProfileController(auth, uploadProfileImage, db);
+
+  router.post(
+    "/password",
+    requireBetterAuthAdmin(auth),
+    validate(setPasswordSchema, "body"),
+    controller.setPassword
+  );
 
   router.use(requireSession(auth));
 

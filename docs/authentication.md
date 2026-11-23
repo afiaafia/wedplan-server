@@ -24,6 +24,18 @@ second, unrelated authentication mechanism.
    `session.create.before` database hook in `src/lib/auth.ts`, which covers
    email/password and Google OAuth sign-in.
 
+## Setting an initial Admin password
+
+An Admin who signs in with Google can set an initial email/password credential
+from `/settings`. The server accepts this only for an authenticated Better Auth
+Admin session whose own account has Google linked. It passes the session
+headers to Better Auth's server-only `auth.api.setPassword()`; no user ID is
+accepted from the browser and no password hash is generated or stored by
+application code. Better Auth refuses to overwrite an existing password.
+
+The password must be 6–128 characters and include at least one uppercase and
+one lowercase letter. This flow preserves the current user and Google account.
+
 ## JWT status
 
 There is deliberately **no JWT verification layer**: the project has no JWT

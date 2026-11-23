@@ -89,3 +89,17 @@ export function requireAdmin(auth: Auth): RequestHandler {
       .catch(next);
   };
 }
+
+export function requireBetterAuthAdmin(auth: Auth): RequestHandler {
+  return (req, res, next) => {
+    void auth.api
+      .getSession({ headers: getSessionHeaders(req) })
+      .then((session) => {
+        res.locals.admin = authorizeAdminSession(
+          session as SessionForAdminAuth | null
+        );
+        next();
+      })
+      .catch(next);
+  };
+}

@@ -5,14 +5,16 @@ import { ObjectId } from "mongodb";
 import { getDatabase, getMongoClient } from "../config/database.js";
 import { getAllowedClientOrigins } from "../config/client-origins.js";
 import { sendPasswordResetEmail } from "./password-reset-email.js";
+import {
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  validatePasswordPolicy,
+} from "./password-policy.js";
 import { BETTER_AUTH_CLIENT_IP_HEADER } from "../middleware/better-auth-client-ip.js";
 import {
   assertRegistrationRole,
   resolveRegistrationRole,
 } from "../validators/user.validator.js";
-
-const MIN_PASSWORD_LENGTH = 6;
-const MAX_PASSWORD_LENGTH = 128;
 
 const BLOCKED_SIGN_IN_MESSAGE = "Your account has been blocked";
 
@@ -26,7 +28,12 @@ const PROTECTED_USER_FIELDS = [
   "stripeSubscriptionStartedAt",
 ] as const;
 
-const PASSWORD_ROUTES = ["/sign-up/email", "/reset-password", "/change-password"];
+const PASSWORD_ROUTES = [
+  "/sign-up/email",
+  "/reset-password",
+  "/change-password",
+  "/set-password",
+];
 
 async function rejectBlockedSession(userId: unknown): Promise<void> {
   if (typeof userId !== "string" || !ObjectId.isValid(userId)) return;
@@ -112,26 +119,7 @@ function getValidatedAuthEnv() {
   };
 }
 
-export function validatePasswordPolicy(
-  password: unknown
-): string | null {
-  if (typeof password !== "string") {
-    return "Password is required";
-  }
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long`;
-  }
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    return `Password must be at most ${MAX_PASSWORD_LENGTH} characters long`;
-  }
-  if (!/[A-Z]/.test(password)) {
-    return "Password must contain at least one uppercase letter";
-  }
-  if (!/[a-z]/.test(password)) {
-    return "Password must contain at least one lowercase letter";
-  }
-  return null;
-}
+export { validatePasswordPolicy } from "./password-policy.js";
 
 export function resolveRegistrationUserData(
   user: Record<string, unknown>,
@@ -218,7 +206,8 @@ function createRegistrationPolicyPlugin(): BetterAuthPlugin {
           handler: createAuthMiddleware(async (context) => {
             const body = (context.body ?? {}) as Record<string, unknown>;
             const password =
-              context.path === "/change-password"
+              context.path === "/change-password" ||
+              context.path === "/set-password"
                 ? body.newPassword
                 : body.password;
             const passwordError = validatePasswordPolicy(password);

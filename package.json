@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --import tsx --test tests/auth-role.test.ts tests/auth-security.test.ts tests/multi-role.test.ts tests/client-origins.test.ts tests/subscription-plan.test.ts tests/service-limit.test.ts tests/service-validation.test.ts tests/vendor-auth.test.ts tests/vendor-cors.test.ts tests/vendor-scope.test.ts tests/api-contract.test.ts tests/featured-services.test.ts tests/admin-services.test.ts tests/image-upload.test.ts tests/booking.test.ts tests/public-services.test.ts tests/customer-dashboard.test.ts tests/vendor-admin-dashboard.test.ts tests/stripe-payment.test.ts",
+    "test": "node --import tsx --test tests/auth-role.test.ts tests/auth-security.test.ts tests/set-password.test.ts tests/multi-role.test.ts tests/client-origins.test.ts tests/subscription-plan.test.ts tests/service-limit.test.ts tests/service-validation.test.ts tests/vendor-auth.test.ts tests/vendor-cors.test.ts tests/vendor-scope.test.ts tests/api-contract.test.ts tests/featured-services.test.ts tests/admin-services.test.ts tests/image-upload.test.ts tests/booking.test.ts tests/public-services.test.ts tests/customer-dashboard.test.ts tests/vendor-admin-dashboard.test.ts tests/stripe-payment.test.ts",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint",
     "build": "tsc",

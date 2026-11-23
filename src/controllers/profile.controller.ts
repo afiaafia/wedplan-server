@@ -19,6 +19,8 @@ import type {
 import type { ImageUploadBody } from "../validators/service.validator.js";
 import type { Auth } from "../lib/auth.js";
 import { issueWedPlanJwt } from "../lib/jwt.js";
+import { validatePasswordPolicy } from "../lib/password-policy.js";
+import type { SetPasswordBody } from "../validators/profile.validator.js";
 
 export type ProfileImageUploader = (
   input: ImageUploadBody
@@ -26,6 +28,24 @@ export type ProfileImageUploader = (
 
 const defaultUploader: ProfileImageUploader = (input) =>
   uploadServiceImages(input);
+
+function getBetterAuthErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("body" in error)) {
+    return undefined;
+  }
+
+  const body = error.body;
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("code" in body) ||
+    typeof body.code !== "string"
+  ) {
+    return undefined;
+  }
+
+  return body.code;
+}
 
 export function createProfileController(
   auth: Auth,
@@ -106,6 +126,67 @@ export function createProfileController(
     }),
 
     update: updateUser,
+
+    setPassword: asyncHandler(async (req, res) => {
+      const { newPassword } = getValidated<SetPasswordBody>(res);
+      const passwordError = validatePasswordPolicy(newPassword);
+      if (passwordError) {
+        throw new AppError(400, "WEAK_PASSWORD", passwordError);
+      }
+
+      const headers = getSessionHeaders(req);
+      const accounts = await auth.api.listUserAccounts({ headers });
+      if (!accounts.some((account) => account.providerId === "google")) {
+        throw new AppError(
+          403,
+          "GOOGLE_SIGN_IN_REQUIRED",
+          "Sign in with Google before setting a password"
+        );
+      }
+
+      let result: Awaited<ReturnType<Auth["api"]["setPassword"]>>;
+      try {
+        result = await auth.api.setPassword({
+          headers,
+          body: { newPassword },
+        });
+      } catch (error) {
+        const code = getBetterAuthErrorCode(error);
+        if (code === "PASSWORD_ALREADY_SET") {
+          throw new AppError(
+            409,
+            "PASSWORD_ALREADY_SET",
+            "A password is already set for this account"
+          );
+        }
+        if (code === "UNAUTHORIZED") {
+          throw new AppError(401, "UNAUTHORIZED", "Please sign in again");
+        }
+
+        console.error(
+          "Set password operation failed",
+          error instanceof Error ? error.name : "UnknownError"
+        );
+        throw new AppError(
+          500,
+          "PASSWORD_SET_FAILED",
+          "Unable to set the password. Please try again."
+        );
+      }
+
+      if (!result.status) {
+        throw new AppError(
+          500,
+          "PASSWORD_SET_FAILED",
+          "Unable to set the password. Please try again."
+        );
+      }
+
+      res.status(200).json({
+        success: true,
+        data: { passwordSet: true },
+      });
+    }),
 
     onboardVendor: asyncHandler(async (_req, res) => {
       const user = res.locals.user as AuthenticatedUser;

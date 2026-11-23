@@ -26,7 +26,14 @@ export const profileImageUploadSchema = z
   })
   .strict();
 
+export const setPasswordSchema = z
+  .object({
+    newPassword: z.string().min(6).max(128),
+  })
+  .strict();
+
 export type UpdateProfileBody = z.infer<typeof updateProfileSchema>;
 export type ProfileImageUploadBody = z.infer<
   typeof profileImageUploadSchema
 >;
+export type SetPasswordBody = z.infer<typeof setPasswordSchema>;
