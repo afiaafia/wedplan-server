@@ -1,23 +1,426 @@
-# WedPlan Server
+# WedPlan API
 
-WedPlan Server is the Express/TypeScript API for the WedPlan wedding planning platform. It provides Better Auth authentication, MongoDB-backed services and bookings, role-scoped dashboards, ImgBB image uploads, and Stripe Premium subscriptions. This is the backend deployed on Render.
+<p align="center">
+  <img src="./docs/assets/wedplan-server-hero.svg" alt="WedPlan API — the engine behind the wedding planning platform" width="100%">
+</p>
 
-- **Backend repository:** https://github.com/afiaafia/wedplan-server.git
-- **Frontend repository:** https://github.com/afiaafia/wedplan-client.git
-- **Live website:** https://wedplan-client-ten.vercel.app
-- **Production API base URL:** https://wedplan-server-vcdp.onrender.com
-- **Health endpoint:** `GET /api/health`
+<p align="center">
+  <strong>The role-aware backend behind wedding discovery, bookings, moderation, and subscriptions.</strong>
+</p>
+
+<p align="center">
+  <a href="https://wedplan-server-vcdp.onrender.com/api/health"><strong>API health</strong></a>
+  ·
+  <a href="https://wedplan-client-ten.vercel.app"><strong>Live client</strong></a>
+  ·
+  <a href="#quick-start"><strong>Local setup</strong></a>
+  ·
+  <a href="https://github.com/afiaafia/wedplan-client"><strong>Client repository</strong></a>
+</p>
+
+WedPlan Server is an Express 5 and TypeScript API for the WedPlan wedding planning platform. It combines Better Auth sessions, role and ownership checks, MongoDB-backed marketplace data, ImgBB image uploads, and Stripe subscription webhooks.
+
+| Service | URL |
+| --- | --- |
+| Production API | [wedplan-server-vcdp.onrender.com](https://wedplan-server-vcdp.onrender.com) |
+| Live client | [wedplan-client-ten.vercel.app](https://wedplan-client-ten.vercel.app) |
+| Health | [GET /api/health](https://wedplan-server-vcdp.onrender.com/api/health) |
+| Server repository | [afiaafia/wedplan-server](https://github.com/afiaafia/wedplan-server) |
+
+---
+
+## Backend architecture
+
+```mermaid
+flowchart LR
+    Client["Next.js client<br/>Vercel"]
+    Rewrite["/api rewrite"]
+    Express["Express 5 API"]
+    Auth["Better Auth"]
+    Mongo[(MongoDB collections)]
+    ImgBB["ImgBB"]
+    Stripe["Stripe"]
+
+    Client -->|"Session cookie or bearer token"| Rewrite
+    Rewrite --> Express
+    Express -->|"Session, OAuth, role state"| Auth
+    Auth --> Mongo
+    Express -->|"Queries and mutations"| Mongo
+    Express -->|"Image JSON"| ImgBB
+    Express -->|"Create Checkout Session"| Stripe
+    Stripe -->|"Signed webhook POST"| Rewrite
+    Rewrite --> Express
+```
+
+The API validates JSON and route parameters with Zod, applies Helmet and a CORS allowlist, derives identity from Better Auth sessions or short-lived bearer JWTs, then applies role middleware and resource ownership checks.
+
+---
+
+## Core workflows
+
+### Authentication and authorization
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Client as Next.js client
+    participant API as Express API
+    participant Auth as Better Auth
+    participant DB as MongoDB
+
+    User->>Client: Sign in or sign up
+    Client->>API: POST /api/auth/*
+    API->>Auth: Forward auth request
+    Auth->>DB: Read or create account/session
+    DB-->>Auth: Account and roles
+    Auth-->>Client: HttpOnly session cookie
+    Client->>API: Protected request
+    API->>Auth: Verify session
+    Auth-->>API: Session snapshot
+    API->>DB: Revalidate user state when required
+    API-->>Client: Authorized response or 401/403
+```
+
+Accounts use a normalized `roles` array. The legacy `role` field remains as a compatibility field. Public registration accepts only Customer or Vendor intent; registration and OAuth account creation cannot assign Admin.
+
+Every protected middleware rejects blocked accounts. Route middleware then requires Customer, Vendor, or Admin access. Vendor and Customer operations are scoped to the session-derived user ID. Admin operations require an active Admin session.
+
+### Service moderation
+
+```mermaid
+flowchart TD
+    Create["Vendor creates service"] --> Pending["approvalStatus = pending<br/>isActive = false or vendor choice"]
+    Pending --> Review{"Admin review"}
+    Review -->|"Approve"| Approved["approvalStatus = approved"]
+    Review -->|"Reject"| Rejected["approvalStatus = rejected<br/>rejectionReason optional"]
+    Approved --> Public["Public only if also isActive = true"]
+    Rejected --> Resubmit["Vendor edits listing"]
+    Resubmit --> PendingAgain["approvalStatus = pending"]
+```
+
+Approval never changes `isActive`. Public service queries require both `approvalStatus: "approved"` and `isActive: true`.
+
+### Booking lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Accepted: Vendor accepts
+    Pending --> Rejected: Vendor rejects
+    Pending --> Cancelled: Customer cancels
+    Accepted --> [*]
+    Rejected --> [*]
+    Cancelled --> [*]
+```
+
+Booking identity and status ownership are server-controlled. Duplicate active requests for the same customer, service, and event date are rejected. A unique partial MongoDB index reinforces the application check.
+
+### Stripe subscription flow
+
+```mermaid
+sequenceDiagram
+    actor Vendor
+    participant API as Express API
+    participant Stripe
+    participant DB as MongoDB
+
+    Vendor->>API: POST checkout
+    API->>Stripe: Create subscription Checkout Session
+    Stripe-->>Vendor: Redirect to hosted checkout
+    Vendor->>Stripe: Complete payment
+    Stripe->>API: Signed webhook event
+    API->>API: Verify signature and claim event ID
+    API->>DB: Update transaction and vendor plan
+    API-->>Stripe: 2xx acknowledgment
+```
+
+Only verified Stripe webhook events activate Premium. Client success/cancel redirects do not themselves change subscription state.
+
+---
+
+## Authentication and security
+
+- Better Auth uses the MongoDB adapter.
+- Email/password policy requires 6–128 characters with uppercase and lowercase characters.
+- Google OAuth is configured when Google credentials are present.
+- Better Auth sessions are HttpOnly and cookie-cache-disabled.
+- `roles` is the authorization source of truth; legacy `role` is retained for compatibility.
+- Middleware derives identity from the session or signed bearer token instead of request-supplied ownership.
+- Blocked accounts receive `403 ACCOUNT_BLOCKED`.
+- Role middleware rejects unauthorized requests with `403`.
+- Zod rejects malformed parameters and unknown or invalid request fields according to the route validator.
+- Helmet is enabled and CORS uses an explicit origin allowlist.
+- Stripe webhook payloads are processed from the raw body and verified with the signing secret.
+- Webhook event IDs are claimed idempotently and stale processing records can be reclaimed.
+- Image uploads stay server-side; MongoDB stores the hosted ImgBB URLs rather than raw image data.
+
+Security-sensitive values remain server-only and must not be placed in `NEXT_PUBLIC_*` variables or source control.
+
+---
+
+## API route overview
+
+The API uses an envelope such as:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request parameters",
+    "details": []
+  }
+}
+```
+
+### Authentication and profile
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `ALL` | `/api/auth/*splat` | Public | Better Auth auth, session, OAuth, and account operations |
+| `GET` | `/api/me` | Session | Current profile |
+| `POST` | `/api/me/token` | Session | Issue a 15-minute API bearer token |
+| `POST` | `/api/me/roles/vendor` | Authenticated Customer | Add Vendor capability to the current account |
+| `PATCH` | `/api/me` | Session | Update the current profile |
+| `POST` | `/api/me/image` | Session | Upload a profile image to ImgBB |
+
+### Public services
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/services` | Public | Browse approved, active services |
+| `GET` | `/api/services/featured` | Public | Get database-backed featured services |
+| `GET` | `/api/services/:id` | Session | Get an approved, active service detail |
+
+### Customer
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/bookings` | Customer | Create a booking request |
+| `GET` | `/api/customer/dashboard` | Customer | Dashboard totals and recent bookings |
+| `GET` | `/api/customer/bookings` | Customer | Booking history |
+| `GET` | `/api/customer/bookings/:id` | Customer | Booking detail |
+| `POST` | `/api/customer/bookings/:id/cancel` | Customer | Cancel a Pending booking |
+| `GET` | `/api/customer/profile` | Customer | Customer profile |
+| `PATCH` | `/api/customer/profile` | Customer | Update customer profile |
+| `POST` | `/api/customer/profile/image` | Customer | Upload customer profile image |
+
+### Vendor
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/vendor/services` | Vendor | List owned services |
+| `POST` | `/api/vendor/services` | Vendor | Create a service |
+| `GET` | `/api/vendor/services/:id` | Vendor | Get one owned service |
+| `PATCH` | `/api/vendor/services/:id` | Vendor | Edit service content |
+| `PATCH` | `/api/vendor/services/:id/active` | Vendor | Activate or deactivate a service |
+| `DELETE` | `/api/vendor/services/:id` | Vendor | Delete an owned service |
+| `POST` | `/api/vendor/services/images` | Vendor | Upload service images |
+| `GET` | `/api/vendor/dashboard` | Vendor | Vendor dashboard data |
+| `GET` | `/api/vendor/bookings` | Vendor | Booking requests |
+| `GET` | `/api/vendor/bookings/:id` | Vendor | Booking detail |
+| `PATCH` | `/api/vendor/bookings/:id/status` | Vendor | Accept or reject Pending booking |
+| `GET` | `/api/vendor/subscription` | Vendor | Effective subscription state |
+| `POST` | `/api/subscriptions/checkout` | Vendor | Create Stripe Checkout Session |
+| `POST` | `/api/payments/create-checkout-session` | Vendor | Checkout compatibility route |
+
+### Admin
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/dashboard` | Admin | Platform counts and recent records |
+| `GET` | `/api/admin/users` | Admin | Search and list users |
+| `GET` | `/api/admin/users/:id` | Admin | User detail |
+| `PATCH` | `/api/admin/users/:id/blocked` | Admin | Block or unblock an account |
+| `GET` | `/api/admin/services` | Admin | Search and list reviewed or pending services |
+| `PATCH` | `/api/admin/services/:id/approval` | Admin | Approve or reject a Pending service |
+| `PATCH` | `/api/admin/services/:id/active` | Admin | Activate or deactivate a service |
+| `DELETE` | `/api/admin/services/:id` | Admin | Permanently delete a service |
+| `GET` | `/api/admin/bookings` | Admin | Search and list bookings |
+| `GET` | `/api/admin/bookings/:id` | Admin | Booking detail |
+| `GET` | `/api/admin/transactions` | Admin | Search read-only payment records |
+
+### Payments
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/payments/webhook` | Stripe signature | Process webhook events |
+| `POST` | `/api/stripe/webhook` | Stripe signature | Compatibility webhook endpoint |
+| `GET` | `/api/health` | Public | Health response |
+
+---
+
+## MongoDB design
+
+The server creates and indexes the following application collections. Better Auth also uses the Better Auth-managed `user`, `session`, `account`, and `verification` collections.
+
+```mermaid
+erDiagram
+    USER ||--o{ SERVICE : "vendor owns"
+    USER ||--o{ BOOKING : "customer or vendor"
+    SERVICE ||--o{ BOOKING : "requested for"
+    USER ||--o{ TRANSACTION : "vendor subscribes"
+    USER ||--o{ SESSION : "authenticates"
+    TRANSACTION ||--o| WEBHOOK_EVENT : "recorded from"
+
+    USER {
+        ObjectId _id
+        string email
+        string name
+        array roles
+        string role
+        boolean isBlocked
+        string subscriptionPlan
+        date subscriptionExpiresAt
+    }
+    SERVICE {
+        ObjectId _id
+        string vendorId
+        string title
+        string category
+        boolean isActive
+        string approvalStatus
+        array images
+    }
+    BOOKING {
+        ObjectId _id
+        string customerId
+        string vendorId
+        string serviceId
+        string status
+        string activeRequestKey
+        date eventDate
+    }
+    TRANSACTION {
+        ObjectId _id
+        string vendorId
+        string status
+        string plan
+        number amount
+        string currency
+        string stripeSessionId
+        string stripeSubscriptionId
+    }
+    WEBHOOK_EVENT {
+        ObjectId _id
+        string eventId
+        string status
+    }
+```
+
+Important database protections include:
+
+- Text and browse/sort indexes for public service discovery
+- Vendor ownership and active-service indexes
+- A unique partial `activeRequestKey` index for duplicate active booking prevention
+- Unique Stripe session and sparse subscription indexes
+- A unique webhook event ID index
+- User role, blocked-state, and subscription indexes
+- Atomic `serviceLimitCounters` updates for concurrent free-plan activation
+
+## Stripe payment lifecycle
+
+The server creates a recurring monthly Stripe subscription Checkout Session. Amount, currency, and interval come from `STRIPE_PRICE_ID`; client requests cannot change them.
+
+The supported webhook handler processes:
+
+- `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`
+- `checkout.session.async_payment_failed`
+- `checkout.session.expired`
+- `customer.subscription.updated`
+- `customer.subscription.deleted`
+- `invoice.payment_succeeded`
+- `invoice.payment_failed`
+
+The handler verifies the raw-body signature, claims event IDs, validates vendor/plan metadata, creates or updates transaction records, and changes subscription state only after the implemented event checks pass.
+
+Webhook event records support idempotency and failure/retry states. Admin transaction status remains read-only and is not exposed as a manual mutation action.
+
+---
 
 ## Technology stack
 
-- Node.js 24, Express 5, TypeScript, pnpm 12.4.2
-- MongoDB Atlas with the official `mongodb` driver
-- Better Auth 1.7 with the MongoDB adapter
-- Zod validation, Helmet, CORS allowlist
-- Stripe SDK (test mode in local configuration)
-- Node.js built-in test runner with `tsx`
+| Area | Technology |
+| --- | --- |
+| Runtime | Node.js 24-compatible runtime |
+| Framework | Express 5.3 |
+| Language | TypeScript 6 |
+| Authentication | Better Auth 1.7.25 |
+| Database | MongoDB 7 driver / MongoDB Atlas |
+| Validation | Zod 4 |
+| Security | Helmet 8, CORS 2 |
+| Payments | Stripe SDK 23 |
+| Images | ImgBB REST upload |
+| Email | Resend API |
+| JWT | JOSE 6 |
+| Testing | Node.js test runner with `tsx` |
+| Package manager | pnpm 12.4.2 |
 
-## Installation
+---
+
+## Environment variables
+
+Never commit real values.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NODE_ENV` | Recommended | Runtime mode; affects secure cookies and production seeder guards |
+| `PORT` | Optional | API port; defaults to `5000` |
+| `CLIENT_URL` | Production | Primary frontend origin |
+| `CORS_ALLOWED_ORIGINS` | Production | Comma-separated credentialed CORS allowlist |
+| `SERVER_URL` | Recommended | Canonical backend origin |
+| `MONGODB_URI` | Yes | MongoDB connection URI |
+| `MONGODB_DB_NAME` | Yes | Database name |
+| `BETTER_AUTH_SECRET` | Yes | Auth signing secret; minimum 32 characters |
+| `BETTER_AUTH_URL` | Yes | Public auth/base origin |
+| `BETTER_AUTH_COOKIE_SAME_SITE` | Optional | `lax`, `strict`, or `none`; defaults to `lax` |
+| `GOOGLE_CLIENT_ID` | Yes for Google OAuth | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Yes for Google OAuth | Google OAuth client secret |
+| `WEDPLAN_JWT_SECRET` | Optional | Dedicated JWT signing secret; fallback is `BETTER_AUTH_SECRET` |
+| `WEDPLAN_JWT_ISSUER` | Optional | JWT issuer override |
+| `WEDPLAN_INITIAL_ADMIN_EMAIL` | Bootstrap only | Existing verified account targeted by the interactive Admin command |
+| `STRIPE_SECRET_KEY` | Yes for payments | Stripe secret key |
+| `STRIPE_WEBHOOK_SECRET` | Yes for webhooks | Stripe webhook signing secret |
+| `STRIPE_PRICE_ID` | Yes for subscriptions | Recurring monthly Premium Price ID |
+| `IMGBB_API_KEY` | Yes for uploads | Server-only ImgBB key |
+| `RESEND_API_KEY` | Optional | Password-reset email provider key |
+| `PASSWORD_RESET_FROM_EMAIL` | Optional | Resend sender identity |
+| `ALLOW_PRODUCTION_FEATURED_SEED` | Optional | Explicit production opt-in for the development seeder |
+
+Copy `.env.example` to `.env` for local setup and replace placeholder values:
+
+```bash
+cp .env.example .env
+```
+
+## JWT authentication
+
+The browser normally uses Better Auth cookies. `POST /api/me/token` requires a valid session and returns a 15-minute HS256 bearer token.
+
+Protected middleware verifies:
+
+- Bearer token signature
+- Issuer
+- Audience
+- Expiration
+- Current MongoDB user role
+- Current blocked state
+
+Set `WEDPLAN_JWT_SECRET` to a dedicated value when possible. Never expose it to the client.
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- Node.js 24-compatible runtime
+- pnpm 12.4.2
+- MongoDB Atlas or a local MongoDB-compatible connection
+- Better Auth, Google OAuth, ImgBB, and Stripe values for the relevant workflows
+
+### Install and run
 
 ```bash
 git clone https://github.com/afiaafia/wedplan-server.git
@@ -26,386 +429,63 @@ pnpm install
 cp .env.example .env
 ```
 
-Fill in `.env` with local development values, then run:
+Configure `.env`, then start:
 
 ```bash
 pnpm dev
 ```
 
-The API listens on `PORT` (default 5000). Production compilation uses `pnpm build` and `pnpm start` (`node dist/server.js`).
+The default port is `5000`.
 
-## Commands
-
-Use pnpm only.
+### Commands
 
 | Command | Purpose |
 | --- | --- |
 | `pnpm dev` | Start with `tsx watch` |
 | `pnpm build` | Compile TypeScript to `dist/` |
-| `pnpm start` | Run the compiled server |
+| `pnpm start` | Run `dist/server.js` |
 | `pnpm typecheck` | Run TypeScript without emitting files |
 | `pnpm lint` | Run ESLint |
-| `pnpm test` | Run the backend test suite |
-| `pnpm admin:bootstrap` | Interactively provision the first Admin for an existing account |
-| `pnpm seed:featured` | Development-only featured-service seeder; refuses production unless `ALLOW_PRODUCTION_FEATURED_SEED=true` |
+| `pnpm test` | Run the configured test suite |
+| `pnpm admin:bootstrap` | Interactively provision the first Admin |
+| `pnpm seed:featured` | Development featured-service seeder |
 
-## API overview
+---
 
-| Area | Base path | Access |
-| --- | --- | --- |
-| Authentication/session | `/api/auth/*` | Public/auth endpoints |
-| Public services | `/api/services` | Public |
-| Booking requests | `/api/bookings` | Customer |
-| Customer dashboard/profile | `/api/customer`, `/api/me` | Authenticated/customer |
-| Vendor services/bookings/dashboard/subscription | `/api/vendor/*` | Vendor |
-| Admin dashboard/users/services/bookings/transactions | `/api/admin/*` | Admin |
-| Checkout | `/api/subscriptions/checkout`, `/api/payments/create-checkout-session` | Vendor |
-| Stripe webhook | `/api/payments/webhook`, `/api/stripe/webhook` | Stripe signature |
-| Health | `/api/health` | Public |
+## Initial Admin provisioning
 
-Error responses use `{ "success": false, "error": { "code", "message", "details?" } }`. Validation is strict: client-supplied ownership, role, approval, subscription, and status fields are rejected.
+Admin access cannot be granted through public registration or an API endpoint.
 
-## Admin dashboard and first-Admin setup
+1. Create and verify the intended existing account.
+2. Set `WEDPLAN_INITIAL_ADMIN_EMAIL` to that account's normalized email.
+3. Run `pnpm admin:bootstrap`.
+4. Confirm the exact account shown by the interactive prompt.
 
-The Admin overview reports user, blocked-user, service-approval, booking-status,
-and transaction-status counts. Completed transaction totals are grouped by
-currency; currencies are never combined. Admin service search can match a
-vendor's name or email, and Admin-only service and transaction responses include
-vendor contact details. Transaction records expose their Stripe provider and
-stored subscription reference, but transaction status remains read-only and
-webhook-controlled. Admin service activation uses the same atomic subscription
-capacity enforcement as vendor activation.
+The command refuses missing, blocked, unverified, or non-existent accounts and refuses databases that already contain an Admin.
 
-Admin access is never granted through registration or a public API. To create
-the initial Admin:
+## Error handling and logging
 
-1. Create and verify the intended account through the existing sign-in flow.
-2. Set `WEDPLAN_INITIAL_ADMIN_EMAIL` to that account's email in the operator's
-   local environment; do not commit a real email or credentials.
-3. Run `pnpm admin:bootstrap` from the server directory and type the exact
-   normalized email shown at the interactive confirmation prompt.
+The API normalizes route errors into a `success: false` envelope and includes a stable `code`. Zod validation errors return HTTP `400` with field details. Known application errors use `AppError`; unexpected exceptions are logged and return HTTP `500`.
 
-The command refuses non-interactive use, missing, blocked, or unverified
-accounts, and any database that already contains an Admin. It preserves
-existing account roles and exposes no HTTP endpoint. Any later Admin grants
-require a separately controlled operator procedure; the first-Admin command is
-intentionally one-time.
-
-## Environment variables
-
-See `.env.example` for the full template. Never commit real values.
-
-| Variable | Purpose |
-| --- | --- |
-| `NODE_ENV`, `PORT` | Runtime mode and API port |
-| `CLIENT_URL`, `CORS_ALLOWED_ORIGINS` | Credentialed CORS allowlist; no wildcards |
-| `SERVER_URL` | Canonical backend origin |
-| `MONGODB_URI`, `MONGODB_DB_NAME` | Atlas connection string and database (`wedplan`) |
-| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | Auth signing secret (>= 32 chars) and public auth origin |
-| `BETTER_AUTH_COOKIE_SAME_SITE` | `lax`, `strict`, or `none`; `none` requires HTTPS/Secure |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Server-only Google OAuth credentials |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` | Server-only Stripe configuration |
-| `IMGBB_API_KEY` | Server-only ImgBB upload key |
-| `RESEND_API_KEY`, `PASSWORD_RESET_FROM_EMAIL` | Password-reset email delivery |
-| `ALLOW_PRODUCTION_FEATURED_SEED` | Explicit opt-in escape hatch for the dev seeder; leave unset |
-| `WEDPLAN_JWT_SECRET` | Optional 32-character minimum server-only secret for short-lived API bearer tokens |
-| `WEDPLAN_JWT_ISSUER` | Optional JWT issuer override; defaults to `BETTER_AUTH_URL` |
-| `WEDPLAN_INITIAL_ADMIN_EMAIL` | Existing verified account targeted only by the interactive one-time Admin bootstrap command |
-
-## JWT API bearer authentication
-
-WedPlan keeps Better Auth sessions for login, Google OAuth, cookies, and browser authentication. Express also supports short-lived HS256 bearer tokens for protected APIs:
-
-- `POST /api/me/token` requires an active Better Auth session and returns a 15-minute bearer token.
-- Tokens contain only the user ID and authorization claims; protected middleware verifies signature, issuer, audience, and expiration.
-- Every bearer request re-reads the MongoDB user record to enforce current blocked and role state.
-- Invalid, malformed, expired, and insufficient-role bearer requests return `401` or `403`.
-- Set `WEDPLAN_JWT_SECRET` in server-only environment variables, or set it to a dedicated secret separate from `BETTER_AUTH_SECRET`.
-
-## MongoDB setup
-
-Use a MongoDB Atlas cluster and a database named by `MONGODB_DB_NAME` (`wedplan` by default). The application creates collections and required indexes at startup: `user`, `session`, `account`, `verification`, `services`, `bookings`, `transactions`, `webhookEvents`, and `serviceLimitCounters`. Important indexes include the browse/sort indexes, the unique partial `activeRequestKey` booking index, and unique indexes for Stripe session, subscription, and webhook event IDs. The connection is validated with a ping on startup; failed startup is logged and the process exits. The featured-services seeder is for development data only and is guarded against production use.
-
-## Better Auth configuration
-
-`src/lib/auth.ts` configures email/password (minimum 6 characters with upper and lower case), Google OAuth, a 7-day session with cookie cache disabled, HttpOnly/Secure cookies with configurable SameSite, trusted origins from the CORS allowlist, protected user fields, blocked-session checks, and registration role restrictions. The `roles` array is the authorization source of truth; the legacy `role` field remains for compatibility and initial dashboard preference. On startup, the backend backfills missing `roles` from each user's legacy `role` before accepting traffic. Public email registration submits a `registrationRole` intent, which the server validates and maps to protected `role` and `roles` fields; clients cannot directly set or change those fields. Customer and Vendor capabilities share one Better Auth user/email identity. `POST /api/me/roles/vendor` requires an active authenticated Customer and adds Vendor capability to that same user; its target account is always derived from the session, never from request data. Admin cannot be self-assigned or added through public onboarding. OAuth state/callback role metadata assigns an initial public role only when creating a new account; it never changes an existing account's capabilities. Implicit account linking requires a locally verified email to prevent pre-registration account takeover. In production, the frontend proxies browser `/api/*` requests through Vercel to Render. Set `BETTER_AUTH_URL` to the Vercel frontend origin, `CLIENT_URL` and `CORS_ALLOWED_ORIGINS` to that same allowed frontend origin, and `BETTER_AUTH_COOKIE_SAME_SITE=lax` (Secure remains enabled on HTTPS). Google’s authorized redirect URI must be `https://wedplan-client-ten.vercel.app/api/auth/callback/google`; the Vercel rewrite forwards that callback to this server.
-
-Express uses the configured single trusted proxy hop to resolve `req.ip`. Before forwarding an auth request to Better Auth, the server overwrites `x-wedplan-client-ip` with that resolved address; Better Auth uses only this server-generated header for rate limiting, not a caller-supplied forwarding header.
-
-## ImgBB setup
-
-Create an ImgBB API key and set `IMGBB_API_KEY` on the backend only. The browser sends base64 images to `/api/vendor/services/images`, `/api/me/image`, or `/api/customer/profile/image`; the backend validates file type/size and uploads to ImgBB. MongoDB stores only the returned hosted URLs.
-
-## Stripe setup
-
-The project uses Stripe **test mode** in local configuration (`sk_test_...`, `pk_test_...`, `whsec_...`); no live-mode keys are stored in the repository. Keep Test mode enabled for assignments and manual QA. Create a recurring monthly Price in the Stripe Dashboard, set `STRIPE_PRICE_ID`, and set `CLIENT_URL` to the deployed frontend origin for success/cancel redirects. Checkout amount, currency, and interval come from the backend Price ID; the browser cannot change them.
-
-## Webhook configuration
-
-Register `https://wedplan-server-vcdp.onrender.com/api/payments/webhook` in Stripe (or use `/api/stripe/webhook`, a compatibility alias). Subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, and `invoice.payment_failed`. Copy the endpoint signing secret into `STRIPE_WEBHOOK_SECRET` in Render; never commit it. The handler reads the raw body, verifies the signature, claims event IDs idempotently, validates plan/price/currency/vendor metadata, and only then activates Premium. For local testing use `stripe listen --forward-to localhost:5000/api/payments/webhook`.
+The server also logs startup, database index creation, role migration, and selected Stripe and subscription events. Secrets and payment credentials are not written to normal API responses.
 
 ## Deployment
 
-The existing backend is deployed on Render. Expected build command: `pnpm install --frozen-lockfile && pnpm build`; expected start command: `pnpm start`. Set all environment variables in the Render dashboard; do not place secrets in source control. The service must allow the Vercel frontend origin in CORS and Better Auth trusted origins. No `render.yaml` is checked in, so the live service configuration must be verified in the Render dashboard.
+The existing API is deployed on Render at [wedplan-server-vcdp.onrender.com](https://wedplan-server-vcdp.onrender.com).
 
-## API reference
+Typical Render commands:
 
-### Public services
-
-All routes below are public and require no session.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/services` | Search and browse approved, active services |
-| `GET` | `/api/services/featured` | Featured services for the homepage |
-| `GET` | `/api/services/:id` | Get one approved, active service with its public vendor summary |
-
-### `GET /api/services/featured`
-
-Query parameters:
-
-| Parameter | Type | Default | Validation |
-| --- | --- | --- | --- |
-| `limit` | number | `6` | Integer from `1` to `24`; invalid values return HTTP `400 VALIDATION_ERROR` |
-
-Filtering and sorting are enforced in the database query: only documents with
-`approvalStatus: "approved"` AND `isActive: true` are eligible. There is no
-arbitrary featured ranking field, so eligible services are sorted newest first
-(`createdAt` descending, `_id` descending as a tiebreaker). Pending, rejected,
-and inactive services are never returned. Nothing is fabricated to fill the
-response when fewer than `limit` services exist.
-
-Vendors are loaded in a single batched lookup from the `user` collection. Only
-`id` (from `_id`), `name`, `image` (returned as `profileImage`) and
-`businessName` are projected. Missing or invalid vendor references yield
-`vendor: null`. Emails, password hashes, roles, subscription fields, and other
-private data are never projected or returned. Verification badges are omitted
-because no vendor verification field is stored.
-
-Response:
-
-```json
-{
-  "success": true,
-  "data": {
-    "services": [
-      {
-        "id": "507f1f77bcf86cd799439013",
-        "title": "Garden Photographer",
-        "category": "Photography",
-        "description": "Documenting the day",
-        "location": "Lagos",
-        "price": 450000,
-        "images": ["https://images.unsplash.com/photo-1"],
-        "isActive": true,
-        "approvalStatus": "approved",
-        "createdAt": "2026-01-01T00:00:00.000Z",
-        "vendor": {
-          "id": "507f1f77bcf86cd799439011",
-          "name": "Ada Events",
-          "profileImage": "https://example.com/ada.jpg",
-          "businessName": "Ada Weddings"
-        }
-      }
-    ],
-    "total": 1
-  },
-  "meta": {
-    "limit": 6
-  }
-}
+```text
+Build: pnpm install --frozen-lockfile && pnpm build
+Start: pnpm start
 ```
 
-`total` is the number of eligible services in the database, not the number of
-cards in the response. Database failures are returned as HTTP `500` with error
-code `FEATURED_SERVICES_UNAVAILABLE`; they are never replaced with placeholder
-records.
+Configure all server environment variables in Render. Set `BETTER_AUTH_URL`, `CLIENT_URL`, and `CORS_ALLOWED_ORIGINS` for the Vercel frontend origin. A `render.yaml` is not currently checked in, so live service configuration should be confirmed in the Render dashboard.
 
-## Customer booking requests
+Configure the Stripe webhook to:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/bookings` | Submit a booking request for an approved, active service |
-
-Requires an authenticated, non-blocked customer session. The request body is
-strictly validated and accepts only `serviceId`, `eventDate`, `eventLocation`,
-and optional `message`. `customerId` comes from the session and `vendorId` from
-the service document; ownership, status, and identity fields supplied by the
-client are rejected.
-
-- `eventDate` must be a real calendar date (`YYYY-MM-DD` or ISO datetime) in the future.
-- `eventLocation` is required and capped at 150 characters after trimming.
-- `message` is optional, capped at 1000 characters, and stripped of control characters.
-- Status always starts as `"Pending"`; the other values are `"Accepted"`, `"Rejected"`, and `"Cancelled"`.
-
-Duplicate active requests (Pending or Accepted) for the same customer, service,
-and event date return HTTP `409 DUPLICATE_BOOKING`. A unique partial index on
-`activeRequestKey` with `partialFilterExpression: { activeRequestKey: { $exists: true } }`
-provides atomic insert protection; the application pre-check provides a friendly
-error. When an authorized backend action rejects or cancels a booking, it must call
-`releaseActiveBookingKey(bookingId)` so a new request can be created for that date.
-
-## Vendor service limits
-
-- The effective plan is resolved server-side from the authenticated vendor's `user` record (`subscriptionPlan` and `subscriptionExpiresAt`). Request bodies and query parameters cannot supply a plan or vendor ID.
-- `subscriptionPlan: "premium"` grants unlimited active services only while `subscriptionExpiresAt` is a valid timestamp in the future. Missing, malformed, expired, or canceled subscriptions resolve to `free`. Stripe webhooks write a valid future expiry for active subscriptions.
-- Free vendors may have at most **3** services with `isActive: true`. Creating a service with `isActive: true`, activating an inactive service, and reactivating a service all check this limit.
-- Capacity is reserved with an atomic per-vendor counter update inside a MongoDB transaction, so concurrent activations cannot exceed the limit.
-- The fourth activation is rejected with HTTP `403` and error code `FREE_PLAN_LIMIT_REACHED`.
-
-### Vendor endpoints
-
-All routes below require a vendor session; every database filter is scoped to the authenticated vendor's ID.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/vendor/services` | List the vendor's services |
-| `POST` | `/api/vendor/services` | Create a service (`isActive` defaults to `false`; approval always starts as `pending`) |
-| `PATCH` | `/api/vendor/services/:id` | Update service details (not active state) |
-| `PATCH` | `/api/vendor/services/:id/active` | Activate or deactivate a service |
-| `POST` | `/api/vendor/services/images` | Upload up to 10 images to ImgBB and return their hosted URLs |
-| `GET` | `/api/vendor/dashboard` | Vendor-scoped dashboard data |
-
-The dashboard response contains real counts from the `services` and `bookings` collections:
-
-```json
-{
-  "success": true,
-  "data": {
-    "stats": {
-      "totalServices": 0,
-      "activeServices": 0,
-      "pendingApproval": 0,
-      "totalBookings": 0
-    },
-    "services": [],
-    "bookings": []
-  }
-}
+```text
+https://wedplan-server-vcdp.onrender.com/api/payments/webhook
 ```
 
-No estimated or placeholder figures are returned.
-
-### Downgrade behavior
-
-When Premium expires or is canceled, the vendor's services are **not deleted or deactivated**. The account simply resolves to Free on the next request, so a vendor with more than 3 active services keeps those services and can still edit or deactivate them. Further activation attempts are rejected with `FREE_PLAN_LIMIT_REACHED` until the active count falls below 3 (or Premium is renewed). This is enforced from the persisted counter at request time, so a missed or delayed Stripe webhook still results in Free behavior after `subscriptionExpiresAt` passes.
-
-## Admin service approval
-
-New vendor services always start as `pending` and inactive unless the vendor
-opts into activation. They are not publicly visible until an administrator
-approves them. All routes below require an active admin session.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/admin/services` | List real services awaiting or having review |
-| `PATCH` | `/api/admin/services/:id/approval` | Approve or reject a `pending` service |
-
-Approval changes `approvalStatus` and `updatedAt`, and sets or clears
-`rejectionReason` for rejections. It never changes `isActive`, `vendorId`, or
-other service content. Transitions back to `pending` are not exposed by this
-route; vendor edits to an approved service reset it to `pending`. Approval and
-activation are separate: the featured query requires both
-`approvalStatus: "approved"` and `isActive: true`.
-
-Image upload accepts JSON
-`{ "images": [{ "name": "photo.jpg", "data": "<base64>" }] }` and returns
-`{ "success": true, "data": { "images": [{ "url": "https://..." }] } }`. The
-ImgBB key stays on the server; MongoDB stores only the returned URLs in the
-service's `images` array.
-
-## Stripe Premium payments
-
-WedPlan Premium is a **recurring monthly Stripe subscription**. Checkout runs in
-Stripe Checkout `subscription` mode. The amount, currency, and billing interval
-come only from the server-configured Price ID; request bodies cannot change them.
-
-### Environment variables
-
-| Variable | Purpose |
-| --- | --- |
-| `STRIPE_SECRET_KEY` | Server-only Stripe API key. Test keys start with `sk_test_`. |
-| `STRIPE_WEBHOOK_SECRET` | Signing secret for verifying webhook payloads (`whsec_...`). |
-| `STRIPE_PRICE_ID` | ID of the active recurring monthly Premium Price (`price_...`). |
-| `CLIENT_URL` | Frontend origin used for success/cancel redirects. |
-
-The secret key and webhook secret are never exposed in API responses or to the
-client bundle. Required values are checked when the payment module initializes;
-checkout fails closed with `STRIPE_PRICE_NOT_CONFIGURED` when the Price ID is
-missing.
-
-### Stripe Dashboard setup
-
-1. Create a Stripe account (https://dashboard.stripe.com/register) and keep
-   **Test mode** enabled while developing. Test mode keys and data never affect
-   real payments.
-2. Create a **Product** (for example `WedPlan Premium`) and one **recurring
-   monthly Price** in Stripe Billing → Products. Copy the Price ID
-   (`price_...`) into `STRIPE_PRICE_ID`. The backend rejects one-time prices,
-   yearly intervals, inactive prices, and prices without a positive amount.
-3. Add a webhook endpoint pointing to
-   `https://<your-api-domain>/api/payments/webhook` in production. Locally the
-   endpoint is `http://localhost:5000/api/payments/webhook` via Stripe CLI
-   forwarding. (`/api/stripe/webhook` remains supported as a compatibility
-   alias.)
-4. Subscribe the endpoint to `checkout.session.completed`,
-   `checkout.session.async_payment_succeeded`,
-   `checkout.session.async_payment_failed`, `checkout.session.expired`,
-   `customer.subscription.updated`, `customer.subscription.deleted`,
-   `invoice.payment_succeeded`, and `invoice.payment_failed`.
-5. Copy the endpoint's **Signing secret** into `STRIPE_WEBHOOK_SECRET`. Use the
-   secret from the endpoint matching the environment; local CLI secrets differ
-   from production secrets. Do not use the same webhook URL for local and
-   production.
-
-### Local testing with Stripe CLI
-
-```bash
-stripe login
-stripe listen --forward-to localhost:5000/api/payments/webhook
-# The CLI prints a whsec_... signing secret; put it in STRIPE_WEBHOOK_SECRET
-stripe trigger checkout.session.completed
-```
-
-With test mode enabled, use Stripe's test card `4242 4242 4242 4242` with any
-future expiry and CVC in Checkout. Automated tests mock the Stripe SDK and
-never contact Stripe.
-
-### Payment flow and security model
-
-- `POST /api/subscriptions/checkout` (alias: `/api/payments/create-checkout-session`)
-  requires a vendor session and rejects blocked vendors, customers, guests, and
-  vendors that already have active Premium. It reuses an open Checkout session
-  instead of creating duplicates, stores a `pending` transaction, and returns
-  only the Checkout URL.
-- Checkout redirects to
-  `<CLIENT_URL>/dashboard/vendor/payment/success?session_id=...` or
-  `<CLIENT_URL>/dashboard/vendor/payment/cancel`. A redirect never grants
-  Premium.
-- `POST /api/payments/webhook` receives the **raw** body and verifies the Stripe
-  signature before any event handling. Event IDs are claimed with an atomic
-  insert/unique index in the `webhookEvents` collection, so redeliveries are
-  ignored. Processing verifies the session/subscription vendor metadata, plan,
-  price, amount, currency, and payment status before marking the transaction
-  `completed` and writing `subscriptionPlan: "premium"`,
-  `subscriptionExpiresAt`, and `stripeSubscriptionId` to the existing user
-  document.
-- Expiry is evaluated at read time from `subscriptionExpiresAt`, so an expired
-  subscription immediately falls back to Free limits without a cron job.
-  Subscription deletion/inactive events write the Free plan back and clear the
-  Stripe fields. Existing services are never deleted when Premium expires.
-- Transaction statuses are `pending`, `completed`, `failed`, `cancelled`, and
-  `refunded`. They are written only by checkout/webhook code; there is no
-  endpoint that lets an admin or vendor manually mark a payment successful.
-
-## CORS
-
-Credentialed browser requests are accepted only from `https://wedplan-client-ten.vercel.app` and `http://localhost:3000`, plus explicitly configured `CLIENT_URL` and comma-separated `CORS_ALLOWED_ORIGINS` values. Wildcard, path-bearing, and unknown origins are rejected with HTTP `403`.
-
-## Scripts
-
-- `pnpm typecheck` — TypeScript check
-- `pnpm lint` — ESLint
-- `pnpm test` — Node test suite
-- `pnpm build` — compile to `dist/`
-- `pnpm dev` — development server
+The compatibility endpoint is `/api/stripe/webhook`.
