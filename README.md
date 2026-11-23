@@ -27,6 +27,32 @@ WedPlan Server is an Express 5 and TypeScript API for the WedPlan wedding planni
 | Health | [GET /api/health](https://wedplan-server-vcdp.onrender.com/api/health) |
 | Server repository | [afiaafia/wedplan-server](https://github.com/afiaafia/wedplan-server) |
 
+## Website previews
+
+These are temporary documentation placeholders, not website screenshots.
+
+| Homepage | Services |
+| --- | --- |
+| ![Homepage preview placeholder](./docs/assets/previews/homepage-preview.svg) | ![Services preview placeholder](./docs/assets/previews/services-preview.svg) |
+
+| Customer dashboard | Vendor dashboard |
+| --- | --- |
+| ![Customer dashboard preview placeholder](./docs/assets/previews/customer-dashboard-preview.svg) | ![Vendor dashboard preview placeholder](./docs/assets/previews/vendor-dashboard-preview.svg) |
+
+| Admin dashboard |
+| --- |
+| ![Admin dashboard preview placeholder](./docs/assets/previews/admin-dashboard-preview.svg) |
+
+Replace each placeholder with a real screenshot using the matching filename below, then update its Markdown image path above:
+
+| Placeholder | Screenshot filename |
+| --- | --- |
+| `homepage-preview.svg` | `homepage-preview.png` |
+| `services-preview.svg` | `services-preview.png` |
+| `customer-dashboard-preview.svg` | `customer-dashboard-preview.png` |
+| `vendor-dashboard-preview.svg` | `vendor-dashboard-preview.png` |
+| `admin-dashboard-preview.svg` | `admin-dashboard-preview.png` |
+
 ---
 
 ## Backend architecture

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title description">
+  <title id="title">WedPlan API backend</title>
+  <desc id="description">Role-aware Express API powering WedPlan</desc>
+  <rect width="1200" height="320" rx="24" fill="#fbfaf8"/>
+  <circle cx="1040" cy="42" r="230" fill="#75434b" opacity=".07"/>
+  <circle cx="1130" cy="280" r="170" fill="#b89570" opacity=".13"/>
+  <rect x="72" y="64" width="58" height="58" rx="16" fill="#30272a"/>
+  <path d="M101 79c-14 0-20 17-10 27l10 10 10-10c10-10 4-27-10-27z" fill="none" stroke="#fff" stroke-width="3"/>
+  <text x="150" y="105" fill="#30272a" font-family="Georgia, serif" font-size="48" font-weight="700">WedPlan API</text>
+  <text x="72" y="168" fill="#75434b" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="4">THE ENGINE BEHIND THE EXPERIENCE</text>
+  <text x="72" y="211" fill="#30272a" font-family="Georgia, serif" font-size="34">Secure workflows. Real data. Role-aware access.</text>
+  <g transform="translate(750 236)" font-family="Arial, sans-serif" font-size="13" fill="#756b67">
+    <rect x="-12" y="-40" width="344" height="58" rx="16" fill="#fff" stroke="#e9e1dc"/>
+    <circle cx="18" cy="-11" r="13" fill="#75434b"/>
+    <text x="42" y="-6" fill="#30272a" font-weight="700">Express 5 · Better Auth · MongoDB</text>
+  </g>
+</svg>

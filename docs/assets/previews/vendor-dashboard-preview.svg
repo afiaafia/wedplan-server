@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title description">
+  <title id="title">WedPlan Vendor Dashboard preview placeholder</title>
+  <desc id="description">Temporary 16:9 placeholder for the WedPlan Vendor Dashboard. Screenshot coming soon.</desc>
+  <rect width="1280" height="720" fill="#f7f4ef"/>
+  <rect x="36" y="36" width="1208" height="648" rx="24" fill="#fbfaf8" stroke="#e6ded6" stroke-width="2"/>
+  <circle cx="640" cy="214" r="52" fill="#f0e7dc"/>
+  <path d="M640 237c-7-6-27-20-27-34a15 15 0 0 1 27-9 15 15 0 0 1 27 9c0 14-20 28-27 34z" fill="none" stroke="#9b7958" stroke-width="4" stroke-linejoin="round"/>
+  <text x="640" y="330" text-anchor="middle" fill="#30272a" font-family="Georgia, serif" font-size="48" font-weight="700">WedPlan</text>
+  <text x="640" y="400" text-anchor="middle" fill="#75434b" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="600">Vendor Dashboard</text>
+  <rect x="470" y="448" width="340" height="54" rx="27" fill="#f2ece4"/>
+  <text x="640" y="483" text-anchor="middle" fill="#756b67" font-family="Arial, Helvetica, sans-serif" font-size="22">Screenshot coming soon</text>
+  <text x="640" y="548" text-anchor="middle" fill="#9a918a" font-family="Arial, Helvetica, sans-serif" font-size="16">Temporary documentation placeholder</text>
+</svg>

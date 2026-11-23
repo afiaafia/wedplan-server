@@ -5,3 +5,9 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Local development data
+.local/
+
+# Temporary source backups
+*.bak
