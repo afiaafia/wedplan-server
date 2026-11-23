@@ -5,7 +5,7 @@ import { resolveEffectivePlan } from "../services/subscription-plan.service.js";
 import type { AdminUsersQuery } from "../validators/dashboard.validator.js";
 import {
   hasUserRole,
-  normalizeUserRole,
+  getPrimaryUserRole,
   normalizeUserRoles,
 } from "../validators/user.validator.js";
 import { buildPaginationMeta, type PaginationMeta } from "../types/dashboard.js";
@@ -44,8 +44,8 @@ function optionalText(value: unknown): string | undefined {
 }
 
 function toAdminUser(document: UserDocument & { _id: unknown }): AdminUser {
-  const role = normalizeUserRole(document.role);
   const roles = normalizeUserRoles(document.roles, document.role);
+  const role = getPrimaryUserRole(roles, document.role);
   const plan = resolveEffectivePlan({
     subscriptionPlan: document.subscriptionPlan,
     subscriptionExpiresAt: document.subscriptionExpiresAt,

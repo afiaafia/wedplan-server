@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertRegistrationRole,
+  getPrimaryUserRole,
   normalizeUserRoles,
   normalizeUserRole,
   resolveRegistrationRole,
@@ -27,6 +28,18 @@ test("role capabilities preserve multiple roles and fall back to legacy role dat
   assert.deepEqual(normalizeUserRoles(undefined, "vendor"), ["vendor"]);
   assert.deepEqual(normalizeUserRoles([], "customer"), []);
   assert.deepEqual(normalizeUserRoles(["invalid"], "customer"), []);
+});
+
+test("Admin has primary role priority for multi-role accounts", () => {
+  assert.equal(
+    getPrimaryUserRole(["customer", "vendor", "admin"], "customer"),
+    "admin"
+  );
+  assert.equal(
+    getPrimaryUserRole(["customer", "vendor"], "customer"),
+    "vendor"
+  );
+  assert.equal(getPrimaryUserRole(["customer"], "customer"), "customer");
 });
 
 test("registration falls back to customer for OAuth and legacy calls", () => {

@@ -363,6 +363,27 @@ test("one customer identity with both capabilities is authorized for both dashbo
   );
 });
 
+test("Admin is the authoritative primary role when present among multiple roles", () => {
+  const adminUser = authorizeSession(
+    withUser({
+      role: "customer",
+      roles: ["customer", "vendor", "admin"],
+    })
+  );
+
+  assert.equal(adminUser.role, "admin");
+  assert.deepEqual(adminUser.roles, ["customer", "vendor", "admin"]);
+  assert.equal(
+    authorizeAdminSession(
+      withUser({
+        role: "customer",
+        roles: ["customer", "vendor", "admin"],
+      })
+    ).id,
+    baseSession.user.id
+  );
+});
+
 test("sign-out invalidates the session used by protected middleware", async () => {
   let active: SessionSnapshot | null = baseSession;
   const auth = {

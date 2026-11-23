@@ -46,6 +46,17 @@ export function normalizeUserRoles(
   return [normalizeUserRole(legacyRole)];
 }
 
+export function getPrimaryUserRole(
+  roles: unknown,
+  legacyRole?: unknown
+): UserRole {
+  const normalizedRoles = normalizeUserRoles(roles, legacyRole);
+  if (normalizedRoles.includes("admin")) return "admin";
+  if (normalizedRoles.includes("vendor")) return "vendor";
+  if (normalizedRoles.includes("customer")) return "customer";
+  return normalizeUserRole(legacyRole);
+}
+
 export function hasUserRole(
   roles: unknown,
   role: UserRole,

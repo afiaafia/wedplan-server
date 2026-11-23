@@ -1,7 +1,10 @@
 import { jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { ObjectId } from "mongodb";
 import { getDatabase } from "../config/database.js";
-import { normalizeUserRole, normalizeUserRoles } from "../validators/user.validator.js";
+import {
+  getPrimaryUserRole,
+  normalizeUserRoles,
+} from "../validators/user.validator.js";
 import type { UserRole } from "../types/user.js";
 
 export const WEDPLAN_JWT_AUDIENCE = "wedplan-api";
@@ -96,7 +99,7 @@ function parseWedPlanJwtPayload(payload: JWTPayload): WedPlanJwtClaims {
   }
 
   const roles = normalizeUserRoles(payload.roles, payload.role);
-  const role = normalizeUserRole(payload.role);
+  const role = getPrimaryUserRole(roles, payload.role);
   if (roles.length === 0) {
     throw new Error("Invalid WedPlan JWT role claims");
   }
@@ -153,13 +156,11 @@ export async function revalidateJwtUser(claims: WedPlanJwtClaims): Promise<{
   if (roles.length === 0) {
     throw new Error("JWT subject has no valid role");
   }
-  const legacyRole = normalizeUserRole(user.role);
-
   return {
     id: claims.sub,
     email: typeof user.email === "string" ? user.email : claims.email,
     name: typeof user.name === "string" ? user.name : claims.name,
-    role: roles.includes(legacyRole) ? legacyRole : roles[0],
+    role: getPrimaryUserRole(roles, user.role),
     roles,
     isBlocked: false,
   };

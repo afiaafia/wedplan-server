@@ -6,7 +6,7 @@ import type { BookingStatus } from "../types/booking.js";
 import type { ServiceApprovalStatus } from "../types/service.js";
 import type { TransactionStatus } from "../types/transaction.js";
 import {
-  normalizeUserRole,
+  getPrimaryUserRole,
   normalizeUserRoles,
 } from "../validators/user.validator.js";
 import type {
@@ -284,8 +284,8 @@ export async function getAdminDashboardData(
     recentUsers: users.map((user) => {
       const record = user as unknown as Record<string, unknown>;
       const image = asString(record.image);
-      const role = normalizeUserRole(record.role);
       const roles = normalizeUserRoles(record.roles, record.role);
+      const role = getPrimaryUserRole(roles, record.role);
       const createdAt = record.createdAt;
       return {
         id: user._id.toString(),

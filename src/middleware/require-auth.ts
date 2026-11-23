@@ -4,7 +4,7 @@ import type { Auth } from "../lib/auth.js";
 import { hasValidSessionExpiry } from "../lib/session-expiry.js";
 import { AppError } from "../errors/app-error.js";
 import {
-  normalizeUserRole,
+  getPrimaryUserRole,
   normalizeUserRoles,
 } from "../validators/user.validator.js";
 import type { UserRole } from "../types/user.js";
@@ -67,8 +67,7 @@ export function authorizeSession(
   }
 
   const roles = normalizeUserRoles(session.user.roles, session.user.role);
-  const legacyRole = normalizeUserRole(session.user.role);
-  const role = roles.includes(legacyRole) ? legacyRole : roles[0] ?? legacyRole;
+  const role = getPrimaryUserRole(roles, session.user.role);
 
   if (
     options.allowedRoles &&
